@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Path bootstrap so the CLI runs from a checkout without installing the package."""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "src"))
+from acr.__main__ import main  # noqa: E402
+
+if __name__ == "__main__":
+    raise SystemExit(main())

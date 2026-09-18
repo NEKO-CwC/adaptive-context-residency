@@ -1,0 +1,27 @@
+# The machine this project was written on: 4x L20 (46,068 MiB/card), 503 GiB RAM,
+# /data NVMe at 0.41 GB/s, PCIe Gen4 x16 per GPU. All numbers: docs/00-evidence.md.
+
+hbm_pool_tokens: 1003197      # live engine at kv_cache_memory_bytes=13.5 GiB/card
+                              # 1263788 at 17 GiB/card (gate-proven, not yet promoted)
+block_tokens: 256             # simulator granularity; engine page size is open item P-1
+hbm_steerable: false          # phase 2 reality: we fill HBM, the engine decides eviction
+patient_slo_ttft_s: 1.5
+thrash_window_s: 60
+
+cost:
+  kv_bytes_per_token: 57591   # 13.5 GiB x 4 ranks / 1,003,197 tokens (measured)
+  prefill_tokens_per_s: 7900  # 30K cold prefix -> 3.8 s (measured)
+  prefill_tokens_per_s_alt: 41700  # the conflicting 400K/9.6s figure -> C-1 calibration
+  decode_tokens_per_s: 118
+  request_overhead_s: 0.36    # warm short-request TTFT floor (measured)
+
+tiers:
+  - name: ram
+    bytes_gib: 160            # of 359 GiB available => ~2.9M tokens, 2.9x the HBM pool
+    bandwidth_gbs: 96         # 4 x Gen4 x16 links, ~24 GB/s each (C-est, resolution M-1)
+    efficiency: 0.55          # connector + copy-engine overhead until measured
+
+  - name: disk
+    bytes_gib: 1024
+    bandwidth_gbs: 0.413      # measured `dd iflag=direct` on /data
+    enabled: false            # below break-even (~0.446 GB/s): durability only, never latency
