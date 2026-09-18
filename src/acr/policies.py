@@ -44,7 +44,8 @@ class Probe:
     # session -> last reported tool ETA (gateway/agent hint)
     tool_eta: dict[str, float] = field(default_factory=dict)
 
-    def reuse_prob(self, key: str, priors: dict[str, float] | None = None) -> float:
+    def reuse_prob(self, key: str, priors: dict[str, float] | None = None,
+                   use_hints: bool = True) -> float:
         """Reuse probability, falling back to a role prior for blocks with no history yet.
 
         Without the prior a first-time block is priced at the "never seen" floor and can never
@@ -54,6 +55,15 @@ class Probe:
         """
         info = self.index.blocks.get(key)
         p = self.index.live_reuse_prob(key, self.now, self.horizon_s)
+        if use_hints:
+            # An agent that says when it comes back is worth believing: the announcement is an
+            # inter-arrival estimate, and recency alone gets it exactly backwards for the
+            # session that returns soonest but was touched longest ago.
+            eta = self.session_eta(key)
+            if eta > 0 and info is not None:
+                idle = max(0.0, self.now - info.last_use)
+                announced = info.last_use + eta
+                p = max(p, 0.9 if idle <= eta else math.exp(-(idle - eta) / eta) * 0.9)
         if priors and info is not None and info.iat_ema is None:
             return max(priors.get(min(info.roles or {"?"}), priors.get("default", p)), p)
         return p
@@ -262,48 +272,50 @@ class ContinuumTTLPolicy(TierPolicy):
 
 
 class AdaptiveValuePolicy(TierPolicy):
-    """Expected-saved-time residency, admitted against the marginal victim.
+    """Expected-saved-time residency, admitted against the worst current occupant.
 
-        value(b) = P_b · (T_recompute(b) − T_restore(b))  −  λ_mem · T_recompute(b) · P_marginal
+        density(b) = P_b · (T_recompute(b) − T_restore(b)) / bytes(b)
 
-    Eviction orders by value; admission is decided per **prefix chain** and asks the only
-    question that matters under pressure: does this chain save more time than the best block we
-    would have to throw away to hold it? When the tier is not full there is no victim, so
-    admission is free — which is what F-2 (docs/05) says the model should predict.
+    Two properties matter more than the exact weights:
 
-    P_b falls back to a per-role prior for blocks with no history yet; without it a first-time
-    block is priced at zero and the tier locks itself against all new sessions.
+    * **chains, not blocks** — the engine only serves a contiguous resident prefix, so value is
+      evaluated per prefix chain and eviction drops whole chains from the leaf end (docs/05 F-1).
+    * **no remembered admission gate** — the test is always against the worst thing *currently*
+      held, recomputed each time. My first version cached the density of the last evicted victim;
+      it ratchets upward on every eviction and locks the tier forever against any session that
+      has not yet been reused twice. Worth naming as a failure mode: it looks like a conservative
+      policy, not a bug.
+
+    P_b falls back to a per-role prior for blocks with no reuse history (category-conditional
+    reuse: USENIX ATC'25 KVCache trace study); without it a first-time block is priced at the
+    no-history floor and always loses to a proven one.
     """
 
     name = "adaptive_value"
 
     def __init__(self, capacity_bytes: int, lambda_mem: float = 0.5,
-                 horizon_s: float = 120.0,
-                 priors: dict[str, float] | None = None):
+                 horizon_s: float = 120.0, priors: dict[str, float] | None = None):
         super().__init__(capacity_bytes)
         self.lambda_mem = lambda_mem
         self.horizon_s = horizon_s
         self.priors = priors or {"supervisor": 0.5, "patient": 0.6, "reviewer": 0.2,
                                  "rag": 0.05, "default": 0.1}
-        self._marginal_density = 0.0     # value/byte of the best block we have evicted lately
 
     # -- value ----------------------------------------------------------------
 
-    def value(self, e: Entry, now: float, probe: Probe) -> float:
-        """Pure ranking function: must not mutate state, or sorting the same set twice in one
-        pass would drift the admission gate within a single eviction."""
+    def density(self, key: str, nbytes: int, now: float, probe: Probe) -> float:
+        """Seconds of recompute this block saves per byte held. The only comparable currency
+        across blocks of different sizes and different owners."""
         probe.horizon_s = self.horizon_s
-        p = probe.reuse_prob(e.key, self.priors)
-        benefit = p * (probe.recompute_seconds(e.nbytes) - probe.restore_seconds(e.nbytes))
-        displacement = self.lambda_mem * probe.recompute_seconds(e.nbytes) * p * self.pressure
-        return benefit - displacement
+        p = probe.reuse_prob(key, self.priors)
+        saved = p * max(0.0, probe.recompute_seconds(nbytes) - probe.restore_seconds(nbytes))
+        return saved / max(1, nbytes)
 
-    def insert(self, key, nbytes, now, probe):
-        super().insert(key, nbytes, now, probe)
-        # A tier with room to spare has no marginal victim; forget the stale gate so it does not
-        # permanently block admissions after pressure subsides.
-        if self.pressure < 0.9:
-            self._marginal_density = 0.0
+    def value(self, e: Entry, now: float, probe: Probe) -> float:
+        """Pure ranking function for blocks inside one chain: must not mutate state, or sorting
+        the same set twice in a pass would drift the decision mid-eviction."""
+        return self.density(e.key, e.nbytes, now, probe) * e.nbytes * (
+            1.0 - self.lambda_mem * min(1.0, self.pressure))
 
     # -- decisions ------------------------------------------------------------
 
@@ -312,26 +324,71 @@ class AdaptiveValuePolicy(TierPolicy):
             return []
         if self.pressure < 0.9:
             return items                                   # nothing has to be displaced
-        probe.horizon_s = self.horizon_s
         total = sum(nbytes for _, nbytes in items)
-        benefit = sum(probe.reuse_prob(key, self.priors)
-                      * max(0.0, probe.recompute_seconds(nbytes) - probe.restore_seconds(nbytes))
-                      for key, nbytes in items)
-        return items if benefit / max(1, total) >= self._marginal_density else []
+        incoming = sum(self.density(key, nbytes, now, probe) * nbytes
+                       for key, nbytes in items) / max(1, total)
+        worst = min((self.density(e.key, e.nbytes, now, probe) for e in self.entries.values()),
+                    default=0.0)
+        return items if incoming >= worst else []
 
     def evict(self, needed_bytes, protected, now, probe):
+        """Chain-aware, leaf-first eviction.
+
+        A per-block global ordering scatters holes through every session's chain, and a chain
+        with a hole is worth nothing past the hole — that is why my first per-block version
+        measured *worse* than plain LRU. So: rank chains by density, drop the worst chain first,
+        and inside it drop from the leaf end so every survivor stays a valid prefix. Blocks
+        leased by several sessions (the shared root) go last: they keep the most chains alive.
+        """
         _expire(self.entries, now)
-        order = sorted((e for e in self.entries.values() if e.key not in protected),
-                       key=lambda e: self.value(e, now, probe))
-        before = {e.key: e for e in order}
-        freed = _take(order, needed_bytes, self.entries)
-        if freed:
-            worst = before[freed[-1]]                      # highest-value victim = marginal cost
-            probe.horizon_s = self.horizon_s
-            gain = probe.reuse_prob(worst.key, self.priors) * max(
-                0.0, probe.recompute_seconds(worst.nbytes) - probe.restore_seconds(worst.nbytes))
-            self._marginal_density = gain / max(1, worst.nbytes)
-        return freed
+        candidates = [e for e in self.entries.values() if e.key not in protected]
+        if not candidates:
+            return None
+        chains: dict[str, list[Entry]] = {}
+        for e in candidates:
+            chains.setdefault(self._chain_of(e.key, now, probe), []).append(e)
+        ranked = sorted(chains.values(), key=lambda c: (self._shared_rank(c, probe),
+                                                        self._chain_density(c, now, probe)))
+        out: list[str] = []
+        freed = 0
+        for chain in ranked:
+            for e in sorted(chain, key=lambda e: -self._depth(e.key, probe)):
+                if freed >= needed_bytes:
+                    break
+                out.append(e.key)
+                freed += e.nbytes
+                self.entries.pop(e.key, None)
+            if freed >= needed_bytes:
+                break
+        return out or None
+
+    # -- chain helpers ---------------------------------------------------------
+
+    def _chain_of(self, key: str, now: float, probe: Probe) -> str:
+        """A block belongs to the chain of the single live session leasing it; a block leased by
+        several sessions is its own chain (the shared root) and is treated as untouchable until
+        private chains are exhausted."""
+        info = probe.index.blocks.get(key)
+        if not info:
+            return "?"
+        live = probe.index.live_leases(key, now)
+        if len(live) > 1:
+            return f"shared:{key}"
+        return min(live) if live else key
+
+    def _shared_rank(self, chain: list[Entry], probe: Probe) -> int:
+        return 1 if all((info := probe.index.blocks.get(e.key)) is not None and info.shared
+                        for e in chain) else 0
+
+    def _depth(self, key: str, probe: Probe) -> int:
+        info = probe.index.blocks.get(key)
+        return info.depth if info else 0
+
+    def _chain_density(self, chain: list[Entry], now: float, probe: Probe) -> float:
+        total = sum(e.nbytes for e in chain)
+        if total <= 0:
+            return 0.0
+        return sum(self.density(e.key, e.nbytes, now, probe) * e.nbytes for e in chain) / total
 
 
 class OraclePolicy(TierPolicy):
