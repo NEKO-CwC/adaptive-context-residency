@@ -1,0 +1,4 @@
+=== team x5 on real CC trace, ram 40 GiB @0.55 eff, 1715 turns
+  lru             rec=  9212.5k restore=    0.0GiB wasted=  1166.1s thrash=     0 ttft_p50= 0.44 p95= 35.21 [9s]
+  lfu             rec=  3818.6k restore=  119.3GiB wasted=   485.8s thrash=  2374 ttft_p50= 0.42 p95= 13.31 [10s]
+  fixed_ttl       rec=  9212.5k restore=    0.0GiB wasted=  1166.1s thrash=     0 ttft_p50= 0.44 p95= 35.21 [9s]

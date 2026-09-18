@@ -70,3 +70,63 @@ delays a concurrent short request by roughly the prefill's own duration, which i
 3.42 s (9.2×) we observed live. A model that reproduces a measured number it was not fitted to is
 the closest thing to validation available before phase 1, and it is why the two-server structure
 is kept rather than replaced by a fancier queue.
+
+## F-6. On our own real session, there is no residency problem at all
+
+Replaying the captured Claude Code trace (343 turns, one session, context growing to 323K
+tokens, 66.0 M prompt-tokens offered) through the model at the real 4×L20 sizes:
+
+```
+recompute 350.5 Ktok of 66.0 Mtok offered  ->  99.5 % served from HBM
+host-tier involvement: 0 bytes               wasted prefill: 44.4 s over 14 h
+TTFT p50 0.38 s / p95 0.88 s                 (measured production warm floor: 0.36-0.37 s)
+```
+
+A single agentic session fits entirely inside the HBM pool, so nothing ever leaves to the host
+tier and every policy is identical. **The cold-start pain is not a single-agent problem — it is
+strictly a concurrency/oversubscription problem**, which is worth saying out loud because the
+original pitch ("make cold starts rarer") was framed per-session. It also means our measured
+cumulative 73.8 % hit ratio (vs 99.5 % for one session alone) is itself the size of the
+multi-session interference we are trying to fix.
+
+## F-7. Under team-mode concurrency the host tier is worth 5–9×, and plain LRU captures none of it
+
+Five concurrent copies of the real trace (1,715 turns, 339 M prompt-tokens offered), tier sized
+below the 82 GiB working set (`experiments/logs/2026-09-18-team-real.log`):
+
+| policy | 40 GiB tier: wasted | p95 TTFT | 100 GiB tier: wasted | p95 TTFT |
+| --- | --- | --- | --- | --- |
+| LRU | **1166.1 s (0 B restored)** | 35.2 s | 76.4 s | 4.17 s |
+| LFU | 485.8 s | 13.3 s | 78.3 s | 4.23 s |
+| fixed TTL (size-scaled, no reuse signal) | 1166.1 s | 35.2 s | 81.6 s | 4.28 s |
+| Continuum-style TTL (recompute cost + announced gap) | 207.2 s | 4.95 s | 64.5 s | 3.94 s |
+| **adaptive value (ours)** | 208.2 s | 4.98 s | **61.9 s** | **3.74 s** |
+| Belady oracle | 131.8 s | 4.35 s | 52.6 s | 3.81 s |
+
+Three things to take from it:
+
+1. **Engine-recency tiering can be exactly worthless.** At 40 GiB, LRU and the size-based TTL
+   restored *zero* bytes: with five round-robining sessions and room for ~2.5, recency always
+   evicts the session that is about to come back. Same tier, right signal: 5.6× less wasted time.
+2. **The announced revisit time is worth most of the win; the value function adds the last few
+   percent.** Continuum-style TTL and adaptive-value are within 0.5 % at 40 GiB; adaptive only
+   pulls ahead (−32 % vs Continuum, −19 % vs LRU) once the tier is big enough for choices to be
+   marginal, where it reaches 88 % of the oracle's efficiency. Honest reading: buy the *signal*
+   (tool ETA / session state at the gateway) before buying the *sophistication*.
+3. **`thrash` is ~30 K of the ~50 K restores** at both sizes: most host-tier traffic is context
+   the engine's own HBM LRU had just dropped. The host tier is largely repairing GPU-side
+   eviction decisions — the quantitative case for the HBM residency hint (docs/01 §1, phase 3).
+
+## F-8. What the model cannot see, and therefore where these numbers are optimistic
+
+- HBM is modelled as a byte-capped LRU set; the real engine's block allocator, chunked prefill,
+  MTP and preemption are absent, so real restore counts will be lower and real TTFT noisier.
+- Requests are served by two single servers (prefill, PCIe) with no batching effects on decode;
+  the 9.2× interference result is reproduced by queueing, but multi-stream decode contention is
+  not modelled at all.
+- `tool_eta_s` in the Claude Code loader is the *previous* inter-turn gap, i.e. what an agent
+  would have to predict, not a true announcement; results with a real announcement channel
+  should be better, and results with an uncooperative client should be worse.
+- C-1 is still open (7.9K vs 41.7K tok/s), and it scales every `wasted_s` in the tables above.
+  The *ranking* of policies is insensitive to it (it multiplies all recompute terms equally),
+  which is why the conclusions are phrased as ratios rather than seconds wherever possible.
