@@ -1,5 +1,14 @@
 # 02 — Prior art and where the defensible delta is
 
+> **SUPERSEDED IN PART by [06 — reference ledger](06-reference-ledger.md) (2026-09-19).** Two claims
+> below were killed by sources we had not yet read: *application-semantic residency middleware*
+> (arXiv 2605.27744 — a policy runtime with observe/score/predict/act and cross-session eviction +
+> prefetch) and *block-level admission economics in vLLM* (arXiv 2608.01657 PrefixShield, evaluated
+> in vLLM). The hybrid-state claim is **withdrawn as a paper contribution** by user direction
+> (2026-09-19: the mechanism must not depend on model architecture); it stays as a deployment and
+> evaluation fact. What survives narrows to: measurement/granularity results, bandwidth-budgeted
+> promotion (unverified), and deployed-systems evidence.
+
 Checked 2026-09-18 against arXiv (abstracts read directly, ids given). **The naive version of this
 idea is already taken.** Recording that plainly is more useful than pretending otherwise, and it
 is what makes the remaining space visible.

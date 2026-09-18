@@ -63,7 +63,7 @@ class CostModel:
 @dataclass(frozen=True)
 class SimConfig:
     hbm_pool_tokens: int = 1_003_197         # live config; 1,263,788 at 17 GiB/card
-    block_tokens: int = 256                  # coarse-grained vs the engine's page size (P-1)
+    block_tokens: int = 816                  # engine-verified: attention block forced to 816 tokens
     cost: CostModel = field(default_factory=CostModel)
     tiers: tuple[TierConfig, ...] = ()
     # Phase-2 reality: the controller does not control HBM eviction, only its own tiers.
@@ -87,7 +87,7 @@ def default_config() -> SimConfig:
     """The 4xL20 host this project was written on (docs/00 §3)."""
     return SimConfig(
         hbm_pool_tokens=1_003_197,
-        block_tokens=256,
+        block_tokens=816,
         cost=CostModel(),
         tiers=(
             TierConfig("ram", bytes_capacity=160 * 1024**3, bandwidth_gbs=96.0, efficiency=0.55),

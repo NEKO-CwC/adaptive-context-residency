@@ -3,7 +3,10 @@
 
 hbm_pool_tokens: 1003197      # live engine at kv_cache_memory_bytes=13.5 GiB/card
                               # 1263788 at 17 GiB/card (gate-proven, not yet promoted)
-block_tokens: 256             # simulator granularity; engine page size is open item P-1
+block_tokens: 816             # boot log: "Setting attention block size to 816 tokens to ensure
+                              # that attention page size is >= mamba page size" + mamba page
+                              # padded 1.62% for exact equality. hash_block_size = GCD of
+                              # prefix-cacheable group sizes = 816 unless --prefix-match-unit is set.
 hbm_steerable: false          # phase 2 reality: we fill HBM, the engine decides eviction
 patient_slo_ttft_s: 1.5
 thrash_window_s: 60

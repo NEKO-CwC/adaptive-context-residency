@@ -20,12 +20,18 @@ The whole design is only as good as this table, so the disagreement is recorded 
 | capacity at 15 GiB/card | 1,110,107 tokens | boot log (C5) |
 | capacity at 17 GiB/card | 1,263,788 tokens (+26 %) | boot log (C4/V1), gate-proven: 300×3 growing-prefix PASS |
 | capacity linearity | ≈74,300 tokens / GiB / card | 3-point fit of the rows above |
+| block / prefix-match granularity | **816 tokens** | boot log verbatim: *"Setting attention block size to 816 tokens to ensure that attention page size is >= mamba page size"* + *"Padding mamba page size by 1.62%…"* (all 4 ranks). `hash_block_size` = `prefix_match_unit` if set, else GCD of prefix-cacheable group sizes (`v1/core/kv_cache_utils.py:612-672`) |
 
 Derived (C-derived):
 
 - KV bytes per token, **aggregate over 4 ranks**: 13.5 GiB × 4 / 1,003,197 ≈ **56.4 KiB/token**
   (≈14.1 KiB/token/rank).
 - A 1M-token context = **55 GiB aggregate** (13.8 GiB/rank); 300K = 16.5 GiB; 70K = 3.9 GiB.
+- At 816 tokens/block, one block = **46 MiB aggregate** (5.8 MiB/rank) and 70K = ~86 blocks.
+  Consequence for invalidation blast radius: a content change at position *x* re-misses every
+  block after *x*, so an edit at 10K in a 70K context strands ~73 blocks ≈ 3.4 GiB ≈ **8.5 s** of
+  re-prefill at the measured 7.9K tok/s. Coarse matching is a real cost — but it is the cost
+  side of the *engine's* hash, not a knob ACR introduces (docs/05 F-9).
 - HBM pool is a **single shared budget**, not a per-request reservation. Oversubscription does not
   fail: it causes LRU eviction of idle prefixes, and preemption/recompute when nothing idle remains.
 

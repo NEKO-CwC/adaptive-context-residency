@@ -91,6 +91,10 @@ multi-session interference we are trying to fix.
 
 ## F-7. Under team-mode concurrency the host tier is worth 5–9×, and plain LRU captures none of it
 
+> **⚠ DID NOT REPLICATE at the engine's real block granularity — see F-7b. The numbers below were
+> produced at a simulated 256-token block size; the engine uses 816. Read F-7b before quoting any
+> ratio from this table.**
+
 Five concurrent copies of the real trace (1,715 turns, 339 M prompt-tokens offered), tier sized
 below the 82 GiB working set (`experiments/logs/2026-09-18-team-real.log`):
 
@@ -130,3 +134,51 @@ Three things to take from it:
 - C-1 is still open (7.9K vs 41.7K tok/s), and it scales every `wasted_s` in the tables above.
   The *ranking* of policies is insensitive to it (it multiplies all recompute terms equally),
   which is why the conclusions are phrased as ratios rather than seconds wherever possible.
+
+## F-7b. The F-7 ranking was an artifact of my own block size, and the replication failed
+
+F-7 was produced with `block_tokens: 256`. The engine's real granularity is **816 tokens** (boot
+log, docs/00 §1). Re-running the identical experiment at 816 (`results/exp-real-816.log`,
+2026-09-19):
+
+| policy | 40 GiB: wasted | p95 TTFT | 100 GiB: wasted | p95 TTFT |
+| --- | --- | --- | --- | --- |
+| LRU | 554.5 s (0 B restored) | 20.52 s | 146.8 s | 0.84 s |
+| **LFU** | **248.8 s (45.7 GiB restored)** | **1.85 s** | 146.8 s | 0.84 s |
+| fixed TTL | 554.5 s | 20.52 s | 146.8 s | 0.84 s |
+| Continuum-style TTL | 554.5 s | 20.52 s | 146.8 s | 0.84 s |
+| adaptive value (ours) | 554.5 s | 20.52 s | 146.8 s | 0.84 s |
+| Belady oracle | 549.9 s | 19.86 s | 146.8 s | 0.84 s |
+
+What changed:
+
+1. **The 5.6× hint-driven win vanished.** At 816 tokens our adaptive policy is *statistically tied
+   with LRU* (both restore zero bytes), the oracle buys almost nothing (−0.8 %), and the only policy
+   that helps is plain **frequency** (2.2× less wasted time, p95 20.5 s → 1.85 s). "The signal is
+   worth most of the win" was a conclusion drawn from my own parameterization, not from the system.
+2. **Why**: at 256-token granularity a 285K-token chain is ~1114 blocks, so tier decisions are
+   finely graded and revisit-aware eviction can select them one by one. At 816 tokens the same chain
+   is 350 blocks of 46 MiB, and with a 40 GiB tier holding ~2.5 of 5 chains, whole-chain-granular
+   decisions have nowhere to be clever — retention becomes all-or-nothing per session, so the only
+   thing that matters is not throwing away blocks that are referenced often (LFU) instead of blocks
+   touched last (LRU).
+3. **At 100 GiB every policy is identical** (working set fits) — F-2's capacity-band result
+   reproduced, but now it swamps the whole experiment: the earlier "adaptive wins at 100 GiB" was
+   also granularity-conditioned.
+4. **Single-session and 3-session runs are flat at both sizes** — reconfirming F-6.
+5. **Unseparated confound we must not paper over**: our adaptive policy ties LRU (restoring nothing)
+   at 40 GiB. That is consistent with "coarse tier + all-equal reuse probabilities leaves no room to
+   be clever", but it is *also* consistent with our admission gate rejecting everything under
+   pressure. This harness cannot tell those apart, and we did not run the internal sanity arm
+   (adaptive with admission disabled) that would. Until that is run, F-7b supports "signals bought
+   nothing here", **not** "our policy is fine".
+
+Consequences for how the project runs from now on:
+- the simulator's block size is a **first-class experimental variable**, not a config detail, and it
+  must equal the engine's real value in any headline table;
+- every policy claim now needs the *pair* (granularity, capacity ratio) attached to it;
+- the "buy the signal before the sophistication" conclusion is **withdrawn pending phase A** — it may
+  turn out the honest ordering is `tier + frequency > recency`, with signals mattering only at finer
+  matching;
+- this is the second self-inflicted result in this doc (F-1 also came from a bug) — which is an
+  argument for measuring on the real engine (phase A) before building more policy logic.

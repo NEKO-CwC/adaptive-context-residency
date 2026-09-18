@@ -64,7 +64,10 @@ def cmd_replay(argv: list[str]) -> int:
           f"{turns[-1].t - turns[0].t:,.0f} s, "
           f"{len({t.session_id for t in turns})} sessions, "
           f"{sum(t.prompt_tokens for t in turns) / 1e6:,.1f} M prompt-tokens offered")
-    print(f"# hbm pool {cfg.hbm_pool_tokens:,} tokens | ram {cfg.tier('ram').bytes_capacity / 1024**3:,.0f} GiB"
+    # granularity and capacity ratio travel with the numbers: F-7b showed the ranking flips when
+    # block_tokens changes, so a table quoted without them is meaningless.
+    print(f"# block_tokens {cfg.block_tokens} | hbm pool {cfg.hbm_pool_tokens:,} tokens"
+          f" | ram {cfg.tier('ram').bytes_capacity / 1024**3:,.0f} GiB"
           f" | break-even BW {cfg.cost.breakeven_bw_gbs() * 1000:,.0f} MB/s"
           f" | ram tier {cfg.tier('ram').effective_gbs * 1000:,.0f} MB/s")
     print()

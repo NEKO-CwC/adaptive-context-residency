@@ -23,7 +23,8 @@ The engine is not compute-bound or even memory-bound in the way it looks. Measur
 
 Consequences, in order of how much they change the plan:
 
-1. **Restoring a context from host RAM is ~200× cheaper than recomputing it**
+1. **Restoring a context from host RAM is ~200× cheaper than recomputing it (⚠ prefill rate is
+   contested, docs/00 §2 C-conflict — the ratio is 10× softer if the 41.7K tok/s figure is right)****
    (0.6 µs/token vs 127 µs/token), and RAM holds 6.7× more tokens than the GPU pool.
    The "how much VRAM can we carve out" question is the wrong question.
 2. **The storage (NVMe) tier buys nothing for latency on this box** — 136 µs/token to restore
@@ -64,7 +65,7 @@ What ACR adds is the part nobody ships: **the value function and its signal plum
 | `src/acr/vllm/` | the real artifacts: out-of-tree `CachePolicy` + `OffloadingSpec` for vLLM |
 | `bench/` | cost-model calibration (prefill curve, H2D bandwidth, round-trip correctness) |
 | `bench/` | cost-model calibration (cold-prefill curve; read-only against a live engine) |
-| `docs/` | [evidence](docs/00-evidence.md) · [architecture](docs/01-architecture.md) · [prior art](docs/02-novelty-and-related-work.md) · [roadmap](docs/03-roadmap.md) · [risks](docs/04-risks.md) · [findings](docs/05-findings.md) |
+| `docs/` | [evidence](docs/00-evidence.md) · [architecture](docs/01-architecture.md) · [prior art](docs/02-novelty-and-related-work.md) · [roadmap](docs/03-roadmap.md) · [risks](docs/04-risks.md) · [findings](docs/05-findings.md) · **[reference ledger](docs/06-reference-ledger.md)** · **[scope & ownership](docs/07-scope-and-ownership.md)** |
 
 ## Quickstart
 
@@ -80,6 +81,21 @@ pytest -q
 Early results and the places where the model contradicts the original idea:
 [`docs/05-findings.md`](docs/05-findings.md).
 
-Status: **V0 — simulator + policy layer + vLLM plugin skeleton.** No engine has been touched;
-phase 2 (turning the connector on) requires a maintenance window and passes a byte-exactness
-gate first, because a wrong KV restore in a clinical simulation is silently wrong, not loudly wrong.
+## What this project currently believes about itself
+
+The **repository is the deliverable**; the paper is unsettled. Every mechanism we had queued —
+adaptive TTL, workflow-aware retention, agent-runtime middleware, KV-as-object with fork, block-level
+admission, session-as-lease, rollback consistency — turns out to be already published (see
+[`docs/06`](docs/06-reference-ledger.md)). And our own headline policy result **failed to replicate**
+when the simulator was set to the engine's real 816-token granularity
+([`docs/05` F-7b](docs/05-findings.md)): at that granularity LRU, fixed-TTL, Continuum-style TTL and
+our adaptive value policy are identical and the only winner is plain frequency.
+
+So the next step is not more policy code. It is **phase A** ([`docs/07`](docs/07-scope-and-ownership.md)):
+run the *stock* vLLM GPU↔RAM offload with LRU/ARC on a real multi-session load, measure how much the
+library alone buys, and only then decide whether an information-fair baseline leaves any room for a
+mechanism we could call ours.
+
+Status: **V0 — simulator + policy layer + vLLM plugin skeleton. No engine has been touched.**
+Phase A needs a maintenance window and passes a byte-exactness gate first, because a wrong KV restore
+in a clinical simulation is silently wrong, not loudly wrong.

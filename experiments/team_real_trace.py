@@ -4,14 +4,18 @@ session on one engine, replayed through every residency policy at two host-tier 
 Reproduce:  PYTHONPATH=src python3 experiments/team_real_trace.py
 Logged output: experiments/logs/2026-09-18-team-real.log (the numbers quoted in docs/05).
 """
-import sys, time
-
+import time
 from dataclasses import replace
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys_path_bootstrap = str(ROOT / "src")
+if sys_path_bootstrap not in __import__("sys").path:
+    __import__("sys").path.insert(0, sys_path_bootstrap)
 from acr.config import default_config
 from acr.replay import run_policy
 from acr.trace import Turn, from_jsonl
-real = from_jsonl(Path(__file__).resolve().parent.parent / 'trace' / 'ncu-cc-sample.jsonl')
+real = from_jsonl(ROOT / 'trace' / 'ncu-cc-sample.jsonl')
 base = default_config()
 def team(k, hint_scale=1.0):
     out=[]
