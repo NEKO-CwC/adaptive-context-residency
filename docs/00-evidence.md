@@ -263,3 +263,22 @@ repeated sentence, so a fresh seed still shares its first ~40 % of blocks with e
 (patient TTFT/ITL, agent slowdown) are valid, the **absolute** prefill rate of these synthetic
 prompts is not, and the break-even bandwidth must keep using the G-1 curve. To be closed by
 re-measuring with position-unique random filler.
+
+### 8.1 The gate is admission, not the shape of the backlog (same session, follow-up probes)
+
+A request of **8 tokens** launched 3.0 s into a cold 73.7K prefill waited **7.36 s**; launched at 6.0 s
+it waited **4.01 s** — in both cases exactly `agent_e2e − offset`, i.e. until the prefill ended. An
+8-token request cannot be blocked by a shortage of *its own* size, so what blocks it is the step's
+leftover budget: `scheduler.py:779` only enters the waiting-queue loop `while … and token_budget > 0`,
+and `token_budget` (init 8192, line 524) is decremented by the running request's chunk at line 728.
+Verified in this build that `draft_slots = 0` for plain MTP (`speculative.py:1469-1494`, "MTP / not
+parallel / not draft_model → 0"), so the reserve is not what eats the budget.
+
+**Retracted instrument:** `vllm:iteration_tokens_total` is *not* per-step here — a single-request
+73.7K prefill recorded **one** observation totalling 59,025 tokens (Δcount=1). Any claim about
+"effective chunk size" derived from that histogram (including a ~1.8K-token step implied by the
+patient's 241 ms ITL) is unsupported, and the open question is stated instead of answered: how this
+build actually splits an 8192-token budget across a hybrid+MTP chunked prefill. The cheap, decisive
+experiment is the boot-flag A/B itself — if `long_prefill_token_threshold=2448` lets the mid-prefill
+tiny request through, the budget model above is right and the fix is native; if it does not, there is
+a policy gate not yet located, and `--scheduler-cls` becomes the only path.
