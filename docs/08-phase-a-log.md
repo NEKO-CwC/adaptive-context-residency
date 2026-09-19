@@ -165,3 +165,57 @@ Operational note, because it is the reason this cost 25 minutes: the deploy trap
 refused to run (its child saw the still-alive parent's in-flight marker and stood down) and the
 container carried `--restart unless-stopped`, so the failing config looped instead of dying. Both are
 fixed in the medical repo (`71fc8189e`); experimental windows now start with `--restart no`.
+
+## 2026-09-20 18:10–18:28Z — W1 got a name: it was never a hang
+
+`--alloc plain` (dropping **our own** `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, which
+`deploy_qwen.sh:232` has set since the capacity work, and which `vllm/config/vllm.py:998-1004`
+treats as incompatible with any connector that pins KV) cleared the rejection found in W0. The
+engine then proceeded normally — config, weights, workers — and died inside the connector's own
+boundary construction:
+
+```
+kv_connector/v1/offloading/config.py:60
+  assert group.tokens_per_block % tokens_per_hash == 0
+  AssertionError: tokens_per_block=8 not divisible by tokens_per_hash=816
+  ... EngineCore failed to start
+```
+
+Read from that file: `groups` is built from **every** KV-cache group's `kv_cache_spec.block_size`,
+and `tokens_per_hash` comes from `resolve_kv_cache_block_sizes`. This model has an **8-token group**
+(the GDN/conv state group) and 816-token hash granularity ⇒ `8 % 816 ≠ 0`. The assertion's own hint
+("hybrid models need `--enable-prefix-caching` to align block sizes") is already satisfied: our
+`align` mode aligns **bytes** (page equality, `interface.py:915/939`), not tokens, which is exactly
+why the two groups keep different `tokens_per_block`.
+
+**This is the phase-A result, and it is a statement about the interface, not about our policy:** the
+stock `OffloadingConnector` cannot be enabled on this hybrid tree at the engine's default hash
+granularity. Two follow-ons, each one flag:
+
+1. **W1c — the unlock to try next window:** `--prefix-match-unit 8`. `resolve_kv_cache_block_sizes`
+   lets `prefix_match_unit` override hash granularity and only requires every prefix-cacheable
+   group's block size to be divisible by it; 8 divides both 8 and 816. Prediction: the
+   `config.py:60` assertion clears and boot continues to G-1 (W2), which remains the correctness
+   gate for the layout hazard. If instead it changes the resolved attention block size, the
+   capacity identity in docs/00 §6 predicts what we should see.
+2. **W5 is now a separate, cheaper question:** patch 01 in our chain adds
+   `enable_mamba_fine_grained_prefix_cache` with **default False**, wired next to
+   `prefix_match_unit`/`mamba_block_size`. So production today does *not* take a checkpoint at the
+   shared-prefix junction, and `prefix_match_unit` smaller than the mamba block size is the
+   precondition that makes patch 01 do anything. That is a rollback-granularity win independent of
+   whether the RAM tier ever works.
+
+### Process cost of this window (mine)
+
+- `READINESS_SEC=380` was sized from a 294 s production boot; the connector boot is slower, so the
+  first attempt was inconclusive-by-timeout rather than failed, and cost a second window.
+- The container crash-looped (`RestartCount` 0→3) while `status` read `running` between restarts, so
+  `deploy_qwen.sh`'s crash fast-fail never fired and sat in the readiness loop for the whole budget.
+  Fast-fail must treat a *growing* RestartCount as crash evidence even when status is `running`.
+- A `setsid`-detached watchdog left no log lines after `watchdog start` and was dead while production
+  was down. Recovery came from the deploy's own SIGTERM trap (the fixed `marker_owner_live` let the
+  restore child proceed: `restore-…-PROD-PATCHED-15.5`, boot 289 s, provenance ok, pool 1,152,677
+  tokens) plus the human's external session. The rescuer now runs as a **systemd transient unit**
+  (`ncu-a-watchdog`) so it cannot die with an agent session.
+- End state verified read-only: healthy, no `--kv-transfer-config` in PID 1, no deploy marker, real
+  generate returns.
