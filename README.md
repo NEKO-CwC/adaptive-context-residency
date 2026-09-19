@@ -65,7 +65,7 @@ What ACR adds is the part nobody ships: **the value function and its signal plum
 | `src/acr/vllm/` | the real artifacts: out-of-tree `CachePolicy` + `OffloadingSpec` for vLLM |
 | `bench/` | cost-model calibration (prefill curve, H2D bandwidth, round-trip correctness) |
 | `bench/` | cost-model calibration (cold-prefill curve; read-only against a live engine) |
-| `docs/` | [evidence](docs/00-evidence.md) · [architecture](docs/01-architecture.md) · [prior art](docs/02-novelty-and-related-work.md) · [roadmap](docs/03-roadmap.md) · [risks](docs/04-risks.md) · [findings](docs/05-findings.md) · **[reference ledger](docs/06-reference-ledger.md)** · **[scope & ownership](docs/07-scope-and-ownership.md)** |
+| `docs/` | [evidence](docs/00-evidence.md) · [architecture](docs/01-architecture.md) · [prior art](docs/02-novelty-and-related-work.md) · [roadmap](docs/03-roadmap.md) · [risks](docs/04-risks.md) · [findings](docs/05-findings.md) · **[reference ledger](docs/06-reference-ledger.md)** · [scope & ownership](docs/07-scope-and-ownership.md) · **[phase A field log](docs/08-phase-a-log.md)** |
 
 ## Quickstart
 

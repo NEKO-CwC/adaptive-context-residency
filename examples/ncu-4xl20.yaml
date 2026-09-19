@@ -13,8 +13,8 @@ thrash_window_s: 60
 
 cost:
   kv_bytes_per_token: 57591   # 13.5 GiB x 4 ranks / 1,003,197 tokens (measured)
-  prefill_tokens_per_s: 7900  # 30K cold prefix -> 3.8 s (measured)
-  prefill_tokens_per_s_alt: 41700  # the conflicting 400K/9.6s figure -> C-1 calibration
+  prefill_tokens_per_s: 11000 # C-1 resolved 2026-09-19: cold 4K-150K -> 6.8-11.6K tok/s
+  prefill_tokens_per_s_alt: 7900   # the earlier 30K probe value, for the sensitivity sweep
   decode_tokens_per_s: 118
   request_overhead_s: 0.36    # warm short-request TTFT floor (measured)
 

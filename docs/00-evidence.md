@@ -57,10 +57,22 @@ Measured yesterday: 30K cold ⇒ 7.9K tok/s. These cannot both describe the same
 Possible benign explanations (unverified): the 400K figure was measured on a partially-warm
 prefix, or counted only a segment of the request, or came from a different `max_num_batched_tokens`.
 
-Resolution target **C-1**: measure cold prefill at 20K/50K/100K/200K/400K fresh prefixes on the
-live engine (each is just a request — no restart, no config change) and fit
-`T_recompute(n) = a·n + b·n²`. Until then the simulator's `prefill_tokens_per_s` is a
-single configured constant with the pessimistic (7.9K) value as default and a sensitivity sweep.
+**C-1 — RESOLVED 2026-09-19** by a read-only probe on the live engine (`tune/results/g1-pre.json`,
+identical deterministic content, thinking off, temp 0):
+
+| fresh prompt | cold TTFT | effective tok/s |
+| --- | --- | --- |
+| 4,000 | 0.55 s | 6.8 K (overhead-dominated) |
+| 16,000 | 1.45 s | 10.8 K |
+| 64,000 | 5.47 s | 11.6 K |
+| 150,000 | 13.23 s | 11.2 K |
+
+So cold prefill is **~11K tok/s and roughly linear in this range**; the older "400K in 9.6 s"
+(41.7K tok/s) cannot describe the same code path and is retired. The simulator's default moves to
+`prefill_tokens_per_s = 11_000`; the break-even bandwidth of docs/00 §4 becomes ~624 MB/s, which
+puts the measured NVMe tier (413–432 MB/s) even further below the line — the storage-tier verdict
+strengthens rather than weakens. The 200K/400K points are still unmeasured, so the quadratic term
+remains unknown and long-context recompute is still a *lower*-bound estimate.
 
 ## 3. Host and fabric (C-measured today)
 

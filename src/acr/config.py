@@ -37,8 +37,8 @@ class CostModel:
     """Physical constants that turn a residency decision into seconds."""
 
     kv_bytes_per_token: float = 57_591.0     # 13.5 GiB x 4 ranks / 1,003,197 tokens (measured)
-    prefill_tokens_per_s: float = 7_900.0    # 30K cold prefix -> 3.8 s (measured; C-1 contested)
-    prefill_tokens_per_s_alt: float = 41_700.0  # the conflicting 400K/9.6s figure
+    prefill_tokens_per_s: float = 11_000.0   # C-1 resolved 2026-09-19: 4K-150K cold -> 6.8-11.6K tok/s
+    prefill_tokens_per_s_alt: float = 7_900.0     # the earlier 30K probe value, kept for sensitivity
     decode_tokens_per_s: float = 118.0       # single-stream decode (measured)
     request_overhead_s: float = 0.36         # warm short-request TTFT floor (measured)
 
