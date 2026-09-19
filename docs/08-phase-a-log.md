@@ -132,3 +132,36 @@ Two numbers worth keeping: the margin inequality over-predicted risk (said ~1.3 
 **1.8× throughput difference from 2 GiB of KV reservation**, with co-resident agent traffic being
 the common condition. That gap is the honest, measured version of "why capacity matters", and it
 came with the box already running nothing but our own harness.
+
+## 2026-09-20 — phase A has a named blocker, and it is a geometry one
+
+Two gates stood in front of the stock `OffloadingConnector`, and they were hit in this order:
+
+1. **Allocator gate (real, cleared without an engine).** `vllm/config/vllm.py:998-1004` refuses any
+   connector that pins KV memory while `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` is set —
+   which *our own* `deploy_qwen.sh` had been exporting. Proven with no engine: unset the variable and
+   the identical `VllmConfig(kv_transfer_config=OffloadingConnector, TP4/EP4)` constructs in 1.0 s.
+   Stock exits: stop setting it, or `--enable-cumem-allocator`.
+2. **Block-geometry gate (fatal today).** With (1) cleared, the boot reached engine-core init and
+   died on `offloading/config.py:60`:
+   `tokens_per_block=8 not divisible by tokens_per_hash=816`. The connector asserts over **every**
+   KV-cache group, while the hash unit is derived only from the **prefix-cacheable** groups; this
+   hybrid tree has a recurrent-state group at 8 tokens/block and an attention group at 816. `oom=false`,
+   and the patchset is not implicated (`01-pr-53945` touches `hash_block_size` but no geometry).
+
+What that means for the project, stated plainly: **vLLM's shipped offload path cannot key a hybrid
+GDN+attention cache whose groups disagree with the hash unit** — the library refuses to start rather
+than degrading. That is the strongest evidence yet that "hybrid-state residency" is a real gap rather
+than a tuning exercise, and the weakest evidence for phase A as originally scoped (measure the stock
+tier), which can no longer be done at all on this build without changing group geometry.
+
+Open, and answerable without another window: why `tokens_per_hash` resolves to 816 instead of
+`gcd(816, 8) = 8`, i.e. which group is non-prefix-cacheable (`CircularBufferSpec.prefix_cacheable`
+is False in this tree). Until that is read out, `--mamba-block-size 816` and `--prefix-match-unit 8`
+are *candidate* exits, not a plan: each changes either HBM page geometry or hash cost by ~100×, and
+both feed the capacity identity in docs/00 §6.
+
+Operational note, because it is the reason this cost 25 minutes: the deploy trap's auto-restore
+refused to run (its child saw the still-alive parent's in-flight marker and stood down) and the
+container carried `--restart unless-stopped`, so the failing config looped instead of dying. Both are
+fixed in the medical repo (`71fc8189e`); experimental windows now start with `--restart no`.
