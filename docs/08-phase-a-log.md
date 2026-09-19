@@ -71,3 +71,50 @@ Two minutes of a window buys a cause; fifteen minutes of a full boot buys a time
    and two agent sessions interrupted — for a result that is currently a negative: *this connector
    configuration does not boot here*. The durable output is the tooling and the measured constants,
    which is why they are in commits and docs rather than only in chat.
+
+## Correction (2026-09-19, later same day): both "crashes" were CUDA OOM, not the fault family
+
+The premortem capture added an hour earlier produced the traceback that the recovery path had
+destroyed twice before:
+
+```
+torch.OutOfMemoryError: Tried to allocate 446.00 MiB. GPU 3 has a total capacity of 44.40 GiB
+of which 272.81 MiB is free. … 42.03 GiB allocated by PyTorch, 41.88 MiB in private pools
+(CUDA Graphs), 1.09 GiB reserved by PyTorch but unallocated.
+→ EngineCore fatal → EngineDeadError → HTTP 500 → restarts=10
+```
+
+So the `bfloat16`-state run (failed at round ~60) and the `auto`-state run at the same 17 GiB
+(failed at round ~188) had the **same** cause: **we over-reserved KV**, not prefix granularity.
+The block-432 attribution I wrote an hour earlier was wrong, and the surviving conclusion is the
+geometry one (capacity flat, block halved), not a stability one.
+
+### Margin arithmetic this yielded
+
+At `kv = 17 GiB/card`: measured minimum free during a 300×3 growing-prefix load = **111 MiB**, and
+the failing allocation needed 446 MiB. Peak non-KV resident is therefore
+`44.99 − 20.14 − 17.00 − 0.11 ≈ 7.74 GiB/card`. Because the KV reservation is a fixed allocation,
+giving back 1 GiB buys ~1 GiB of peak margin, so the candidate must satisfy
+
+```
+kv ≤ 44.99 − 20.14 − 7.74 − margin        margin ≥ 1.5 GiB  ⇒  kv ≤ 15.6 GiB
+```
+
+**15.5 GiB** was booted from that inequality: pool **1,152,677 tokens** (+14.9 % vs the 13.5 GiB
+baseline), predicted peak free ≈ 1.6 GiB, gated by the same 300×3 soak plus memory sampling
+(pass criterion: 0 failures **and** min-free ≥ 1 GiB). A capacity claim without a measured peak
+margin is not a claim, it is an outage waiting for round 188.
+
+### Operational findings worth keeping
+
+1. **A fallback target must be labelled so a second responder can tell it from an experiment.**
+   Pinning the in-test `GATE15.5` as `known-good` caused another agent session to distrust it and
+   fall through to `rollback_supervisor.sh` — leaving production *unpatched*, i.e. removing the
+   mitigation for the fault family we spent this whole CR on. The safe fallback is now
+   `PROD-PATCHED-CONSERVATIVE` (13.5 GiB, patched) and candidates live in separate files.
+2. **Escalation counters must be per-incident.** A lifetime-cumulative `actions` counter meant a
+   new incident skipped the pinned (patched) restore and went straight to the unpatched deep
+   rollback, because two *successful* recoveries earlier that day had already reached the limit.
+3. **Premortem capture is what made this diagnosable.** `deploy_qwen.sh` now dumps status + 200 log
+   lines of the *outgoing* container before removing it whenever it is unhealthy/dead. Without it we
+   had two "engine died" events with no traceback and were reasoning from memory counters.
