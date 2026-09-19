@@ -208,3 +208,58 @@ So halving the recurrent state is **not free**: it buys a 2× finer page (816 �
 ~9 % of marginal prefill throughput and a small non-zero logprob drift, while capacity moves +1 %
 (exactly as the page-equality identity predicts). Any gate for a lossy dtype change must therefore be
 a *quality* gate (argmax text + behaviour eval + MTP acceptance), never byte equivalence.
+
+## 8. Batch sharing between the two traffic classes (C-measured 2026-09-20, live engine, no config change)
+
+Instruments: `deploy/gpu/validation/vllm-stability/tune/{batch_interference_probe,batch_mechanism_probe,agent_cost_probe}.py`.
+Every arm records `num_requests_running/waiting` and the `waiting_by_reason` labels around itself,
+so contamination and mechanism are read out rather than assumed. Patient arm = warm 2,274-token
+context + strict-JSON persona reply (~90–150 tokens, the *hard* content class); agent arm = a cold
+~73.7K-token prefill with `max_tokens=1`, so it occupies the step budget without decoding.
+
+**Two distinct harms, separated by arrival order — this is the finding:**
+
+| situation | patient TTFT | patient ITL p50 / p95 | agent prefill |
+| --- | --- | --- | --- |
+| patient alone | 0.48 s | 18.7 / 19.4 ms | — |
+| patient admitted **into** an in-flight 73.7K cold prefill | **9.9–10.6 s** | 18.7–24.7 / 19–177 ms | 7,203–6,806 tok/s (1.02–1.08× slower) |
+| patient admitted **before** the prefill starts (both running) | 0.50 s | **241 / 1,396 ms** | 7,338 tok/s |
+| 4 patient streams + one big prefill | ~10.4 s | 24.3–24.7 / up to 201 ms | 6,806 tok/s |
+| same 73.7K prompt **warm** (hit ratio 0.805) | 0.84 s | 18.0 / 19.0 ms | 28,760 tok/s |
+
+Read from this, in order of consequence:
+
+1. **A newly arriving request gets essentially nothing from a step owned by a running prefill.**
+   `token_budget = max_num_scheduled_tokens` (8192 here) is consumed by the running request's chunk
+   first; the waiting loop only sees the remainder, which is ~0. The engine labels such requests
+   `waiting_by_reason{reason="capacity"}` (measured 3.0 with 6 agents + 1 patient; `deferred` stayed
+   0) — so the starvation is budget, not MTP deferral. This is the thing
+   `long_prefill_token_threshold` addresses, and the prediction is sharp: cap the agent chunk at
+   *T* and a waiting patient's 2.3K prefill fits in the following step, so patient TTFT should fall
+   from ~10 s to ≈ its own prefill plus one chunk (`T`/rate), while the coding side has already been
+   measured to pay only 1.02–1.08× for co-scheduling.
+2. **Once both are running, the harm moves from TTFT to ITL:** 241 ms median / 1.4 s worst between
+   patient tokens. For a role whose output is watched as a stream, that is the worse product
+   failure, and it is invisible in every TTFT-based SLO — including the "0.48 s/call" number this
+   project quoted for two days.
+3. **Priority cannot fix either of these.** It reorders the waiting queue and preempts on KV
+   exhaustion (§6); both harms happen in the allocation among *running* requests.
+4. **Warmth removes both** (last row): the same 73.7K context, cached, costs the patient 0.84 s and
+   normal ITL, and is 4× cheaper for the agent. Residency is therefore not only a recompute-saving
+   mechanism — it is the interference-avoidance mechanism. That reframes ACR's value claim: the tier
+   buys latency isolation as well as capacity.
+5. `max_num_seqs=4` binds only beyond 4 in-flight requests (6 agents + 1 patient → run≤4, wait≤3).
+   With ≤4 requests nothing waits on slots, so the slot cap is a *scaling* limit, not today's
+   bottleneck.
+
+### C-conflict (new, unresolved): cold-prefill rate 7.3K vs 11.1K tok/s
+
+Two single-request measurements of the same engine/config disagree by 1.55×: `g1-pre.json` gives
+90 µs/token (11.1K tok/s) for 64K→150K, while these probes give 136 µs/token (7.3K tok/s) for a
+73.7K `case_prompt`. The likeliest cause is the probe's own content: `case_prompt` builds from a
+repeated sentence, so a fresh seed still shares its first ~40 % of blocks with every earlier prompt
+(hit ratios of 0.18–0.20 in arms meant to be cold) — i.e. these are *partially warm*, and the
+"cold" label is wrong. Consequence for how the numbers may be used: the **ratios** inside one arm
+(patient TTFT/ITL, agent slowdown) are valid, the **absolute** prefill rate of these synthetic
+prompts is not, and the break-even bandwidth must keep using the G-1 curve. To be closed by
+re-measuring with position-unique random filler.
