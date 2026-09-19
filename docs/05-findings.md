@@ -200,7 +200,33 @@ sessions, 40 turns each, coder cadence 8 s / patient cadence 45 s), driven throu
 | 300 → 0.25 M | 72.4 % | 79.8 % | +7.39 pt | −464 s |
 | 240 → 0.20 M | 70.6 % | 76.4 % | +5.78 pt | −363 s |
 
-**Crossover ≈ 35–42 % of the unique working set resident.** Below it, value ranking wins and the
+### Amendment, same night: the baseline is ARC, not LRU
+
+Adding the library's other registered policy (`arc`) and a faithful session-TTL policy
+(`acr.vllm.ttl`, role TTLs patient 60 s / coding 3600 s, refreshed on touch) to the same sweep:
+
+| blocks | lru | **arc** | ttl | acr |
+| --- | --- | --- | --- | --- |
+| 1200 | **98.4 %** | 98.3 % | 96.5 % | 97.4 % |
+| 600 | 89.9 % | **93.4 %** | 79.8 % | 85.2 % |
+| 500 | 82.5 % | **89.6 %** | 78.9 % | 85.4 % |
+| 400 | 76.7 % | 82.6 % | 77.1 % | **83.8 %** |
+| 350 | 74.3 % | 79.3 % | 75.9 % | **82.4 %** |
+| 240 | 70.6 % | 72.7 % | 72.5 % | **76.8 %** |
+
+So the honest crossover is **against ARC at ≈400 blocks (~28 % of the unique working set)**, not the
+~40 % originally written from the LRU-only comparison, and the practical default at every capacity we
+would actually run is `eviction_policy: "arc"`. Two further results:
+
+* **Session TTL — the idea this whole line started from — is falsified as a mechanism**: worst or
+  second-worst at every capacity, and at 600 blocks it is 13.6 points under ARC. Its failure mode is
+  exactly the one a lifetime promise invites: it drops blocks that were about to be reused and keeps
+  blocks nobody asks for.
+* ARC's edge is largest precisely where ACR's role/ETA signal should matter least (mild pressure), and
+  ACR's edge grows monotonically as the cap tightens — consistent with "declared future value only
+  beats recency when recency's memory is too short to cover the reuse tail".
+
+Below it, value ranking wins and the
 latency class wins most: at 350 blocks patient hit goes 22.4 % → 40.5 % *and* coding 88.2 % → 93.9 %
 — a Pareto move, not a trade. Above it, recency is the better prior and our ranking actively hurts.
 

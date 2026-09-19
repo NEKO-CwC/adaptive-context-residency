@@ -36,7 +36,9 @@ PREFILL_TOK_S = 11_100.0         # docs/00 §2 marginal cold prefill
 RESTORE_S_PER_TOK = 0.6e-6       # docs/00 §4 PCIe upper bound
 
 ACR = ("AcrValuePolicy", "acr.vllm.policy")
-LRU = ("lru", None)
+TTL = ("SessionTtlPolicy", "acr.vllm.ttl")     # the original "alive for N seconds" idea, in the same ABC
+LRU = ("lru", None)                             # built-in
+ARC = ("arc", None)                             # built-in adaptive: the strongest library baseline
 
 
 def k(block_hash_idx: str, group: int = GROUP) -> bytes:
@@ -182,7 +184,7 @@ def stream_mixed(coders: int, patients: int, shared_repo: int, turns: int,
     return ev
 
 
-def run(label: str, events, blocks: int, policies=(LRU, ACR)) -> dict:
+def run(label: str, events, blocks: int, policies=(LRU, ARC, TTL, ACR)) -> dict:
     res = {}
     for pol in policies:
         t0 = time.time()
@@ -201,8 +203,8 @@ def run(label: str, events, blocks: int, policies=(LRU, ACR)) -> dict:
               f"recompute={r.stats['recomputed_tokens']/1e3:8.1f}K tok ({r.stats['recomputed_tokens']/PREFILL_TOK_S:6.0f}s) "
               f"errors={r.stats['errors']} ({time.time()-t0:.0f}s)")
         print(f"              {roles}")
-    a, b = res[policies[0][0]], res[policies[1][0]]
-    print(f"  → Δ: hit {b['hit_ratio']-a['hit_ratio']:+.2%}, "
+    a, b = res["lru"], res[max(res, key=lambda k: res[k]["hit_ratio"])]
+    print(f"  → best={b and max(res, key=lambda k: res[k]['hit_ratio'])} vs lru: hit {b['hit_ratio']-a['hit_ratio']:+.2%}, "
           f"recomputed {b['recomputed_tokens']-a['recomputed_tokens']:+d} tok, "
           f"wasted stores {b['wasted_stores']-a['wasted_stores']:+d}, "
           f"recompute-seconds {b['recompute_s']-a['recompute_s']:+.0f}s")
@@ -222,7 +224,7 @@ def main() -> int:
 
     report = []
     # capacity in blocks of 816 tokens: 1.6M tokens ≈ 1960 blocks ≈ 91 GiB at 56.4 KiB/token
-    for blocks in (500, 450, 400, 350, 300, 240):
+    for blocks in (1200, 600, 500, 400, 350, 300, 240):
         report.append(run(f"mixed {blocks}", mixed, blocks))
     json.dump(report, open(a.out, "w"), indent=1)
     errs = sum(p["errors"] for r in report for p in r["policies"].values())
