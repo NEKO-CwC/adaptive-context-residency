@@ -124,3 +124,47 @@ Two independent views of this state must be reconciled, and their divergence is 
 
 The shadow index (§1 diagram) is the diff between them. If the diff is small, the gateway can drive
 residency without engine cooperation — that is the finding that makes phase 1 possible at all.
+
+## 6. Native QoS surface in the deployed build (verified 2026-09-20, read-only greps of the live container)
+
+Every line below was read out of `/usr/local/lib/python3.12/dist-packages` **inside the running
+production container**, not out of upstream docs, because this build is a fork with patches.
+
+| capability | verdict | evidence |
+| --- | --- | --- |
+| per-request `priority` on `/v1/chat/completions` | **present** | `entrypoints/openai/chat_completion/protocol.py:380` |
+| priority via HTTP header (no body rewrite) | **present** | `entrypoints/generate/base/serving.py:45` (`PRIORITY_HEADER = "X-Vllm-Priority"`), `:249` |
+| preemption of the *lowest*-priority running request when blocks run out | **present** | `v1/core/sched/scheduler.py:670-674` (`max(self.running, key=(priority, arrival_time))`) |
+| per-request prefill chunk cap | **present but global** | `scheduler.py:591-592`: clamps `num_new_tokens` for *any* request over the threshold; there is no class dimension |
+| `watermark` (fraction of blocks kept free), `scheduler_reserve_full_isl` | **present** | `vllm/config/scheduler.py` fields; defaults 0.0 / True |
+| per-class KV quota / reservation | **absent** | `grep -l quota vllm/v1/core/ vllm/config/` → no files |
+| priority **overrides a full running-slot set** | **NO — the trap** | `scheduler.py:785-786`: `if num_running >= self.max_num_running_reqs: break` before the waiting queue is consulted; `:777` additionally skips the waiting queue entirely on a step where anything was preempted |
+
+Consequences that change the design:
+
+1. **The engine can express KV precedence and cannot express slot precedence.** `max_num_seqs` is a
+   hard admission cap that priority does not unlock, so "latency class = priority 0" is *not* an
+   interactivity guarantee when all slots are held by long-running agent requests. Slot QoS is
+   therefore a control-plane (gateway semaphore) responsibility — this is ACR's job, not a fork job.
+2. Preemption is **recompute-based** in V1. Without a working RAM tier, a preempted 1M agent context
+   costs ~90 s of cold re-prefill (docs/00 §2). So "medical reclaims capacity" is only cheap if the
+   offload path works; the tier is a dependency of the QoS design, not an optimisation of it.
+3. Production today runs `scheduling_policy=fcfs` (absent from the boot's `non-default args`), so
+   any priority stamping is inert until the engine is booted with `--scheduling-policy priority`.
+   A non-zero `priority` is documented to *error* in that case, which is an unverified claim in this
+   build → must be tested behaviourally, not trusted.
+4. `long_prefill_token_threshold` is bounded below by the page: this build's scheduler keeps a
+   mamba-block-aligned split path (`scheduler.py:419-424`, `:319 need_mamba_block_aligned_split`)
+   and the live page is **816 tokens**, so budgets like 512/1024 (commonly recommended upstream for
+   non-hybrid models) sit *below* one page here. Sweep multiples of 816 instead.
+5. Observability for all of the above already exists: `vllm:num_preemptions_total`,
+   `vllm:prefix_cache_{queries,hits}_total`, `vllm:kv_cache_usage_perc` (seen in `tune/results/g1-*.json`).
+
+`--prefix-match-unit` (`engine/arg_utils.py:1246`) is exposed and, per
+`v1/core/kv_cache_utils.py:608-672`, can be set **finer than the physical block** as long as every
+prefix-cacheable group's block size is divisible by it; the live boot log confirms
+`Mamba cache mode is set to 'align'`, which is the precondition for that path (otherwise the resolver
+silently backs off to the scheduler block size). "It controls matching granularity only, not how
+often states are stored" (verbatim, `config/cache.py:63-66`). This is the lever that answers the
+rollback-stranding problem without touching capacity, and it is exactly the precondition our patch
+01 (`enable_mamba_fine_grained_prefix_cache`) documents.

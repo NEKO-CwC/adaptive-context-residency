@@ -177,3 +177,34 @@ capacity gate is only valid if the soak records the live container's id and
 `--kv-cache-memory-bytes` before and after and asserts they match — enforced in
 `tune/soak_with_attribution.sh`, which **refuses to run** if it cannot read them (an unattributable
 measurement is worse than none, because it looks attributable).
+
+## 7. What the real workload footprints are, and which capacity targets are reachable
+
+Medical-side numbers are read out of the project's own evidence, not assumed:
+`CR-20260819-h2-patient-simulation-runtime-recovery/evidence/G2/*/preflight.json` records, per
+patient turn, `input_tokens` 3,873 and 4,031 with `reserved_output_tokens` 2,800,
+`safety_margin_tokens` 256 inside a `context_window_tokens` 9,216 budget (roles enumerated by
+`contracts/hospital-simulation/v2/patient-behavior-live-context-budget-v1.schema.json`:
+`action_judge`, `patient`, `final_review`, `independent_evaluator`).
+
+| claim | arithmetic | verdict |
+| --- | --- | --- |
+| "reserve 500K of KV for medicine" | 20 concurrent patient sessions × ~4K = **80K tokens = 6.9 %** of the 1.15 M pool | over-provisioned by ~6×; medicine's scarce resource is **decode slots and ITL isolation**, not KV |
+| "grow the pool to 1.5 M tokens" | needs 1.5 M / 74,366 tok·GiB⁻¹ = **20.2 GiB/card**, ceiling is 17.44 GiB/card (§6) | **unreachable** — there is no 1.5 M tier; the only two points are ~1.15 M and ~2.3 M |
+| "two 1 M agents at once" | 2 M / 74,366 = **26.9 GiB/card** | unreachable at bf16 attention; reachable only if `A` halves (fp8) |
+| fp8 attention KV, pre-registered prediction | `capacity = pool / A`, `B = S/A` | pool 1.15 M → **≈2.3 M**; `A` halved → block `B` doubles to **≈1,632** unless `--mamba-ssm-cache-dtype bfloat16` is combined, which restores `B` ≈ 816 at the doubled capacity |
+
+### Already-measured cost of the granularity knob (bf16 state), from `tune/results/g1-bf16.json`
+
+One capture with `--mamba-ssm-cache-dtype bfloat16` against the fp32 baseline (`g1-pre.json`), same
+engine, same content, greedy, thinking off:
+
+| prompt | cold text identical | max Δlogprob | marginal prefill rate |
+| --- | --- | --- | --- |
+| 4 K / 16 K | yes | 1.7e-4 / 1.8e-4 | contaminated (other load on the engine) — do not use |
+| 64 K → 150 K | yes | 2.1e-3 → 3.9e-3 | 11.1 K → **10.4 K tok/s (−9 %)** |
+
+So halving the recurrent state is **not free**: it buys a 2× finer page (816 → 432, measured) for
+~9 % of marginal prefill throughput and a small non-zero logprob drift, while capacity moves +1 %
+(exactly as the page-equality identity predicts). Any gate for a lossy dtype change must therefore be
+a *quality* gate (argmax text + behaviour eval + MTP acceptance), never byte equivalence.
