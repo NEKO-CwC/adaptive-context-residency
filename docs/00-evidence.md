@@ -19,7 +19,8 @@ The whole design is only as good as this table, so the disagreement is recorded 
 | capacity at 13.5 GiB/card | 1,003,197 tokens | boot log |
 | capacity at 15 GiB/card | 1,110,107 tokens | boot log (C5) |
 | capacity at 17 GiB/card | 1,263,788 tokens (+26 %) | boot log — **not deployable**, see the retraction below |
-| capacity at 15.5 GiB/card | **1,152,677 tokens (+14.9 %)** | **production, gated 2026-09-19**: 300×3 growing-prefix, 0 failures, peak 41.12 GiB/card, **3.33 GiB min free**, with real agent traffic co-resident |
+| capacity at 15.5 GiB/card | 1,152,677 tokens (+14.9 %) | **candidate**: booted and probed twice, never soaked as itself (see the attribution note below) |
+| capacity at 13.5 GiB/card | **1,003,197 tokens** | **production now**: 300×3 growing-prefix soak, 0 failures, peak 41.12 GiB/card, **3.33 GiB min free**, real agent traffic co-resident |
 | capacity linearity | ≈74,300 tokens / GiB / card | 3-point fit of the rows above |
 | block / prefix-match granularity | **816 tokens** | boot log verbatim: *"Setting attention block size to 816 tokens to ensure that attention page size is >= mamba page size"* + *"Padding mamba page size by 1.62%…"* (all 4 ranks). `hash_block_size` = `prefix_match_unit` if set, else GCD of prefix-cacheable group sizes (`v1/core/kv_cache_utils.py:612-672`) |
 
@@ -155,3 +156,13 @@ Consequence for how capacity is chosen here: headroom must be measured **with pr
 co-resident**, not by a dedicated soak, and the reservation must be derived from a margin
 inequality rather than from "what fits". Hence 15.5 GiB (3.33 GiB measured margin), and hence the
 `kv ladder` row above no longer describes something we are willing to run.
+
+### Attribution rule for capacity gates (learned by violating it)
+
+The "15.5 GiB gated with 3.33 GiB margin" claim I first wrote here was **mis-attributed**: the
+watchdog had restored the 13.5 GiB fallback four minutes before that soak began
+(`results/deploy-log.tsv`, 12:17:07Z), so the numbers belonged to a different config. From now on a
+capacity gate is only valid if the soak records the live container's id and
+`--kv-cache-memory-bytes` before and after and asserts they match — enforced in
+`tune/soak_with_attribution.sh`, which **refuses to run** if it cannot read them (an unattributable
+measurement is worse than none, because it looks attributable).

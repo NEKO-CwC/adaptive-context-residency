@@ -100,9 +100,10 @@ giving back 1 GiB buys ~1 GiB of peak margin, so the candidate must satisfy
 kv ≤ 44.99 − 20.14 − 7.74 − margin        margin ≥ 1.5 GiB  ⇒  kv ≤ 15.6 GiB
 ```
 
-**15.5 GiB** was booted from that inequality: pool **1,152,677 tokens** (+14.9 % vs the 13.5 GiB
-baseline), predicted peak free ≈ 1.6 GiB, gated by the same 300×3 soak plus memory sampling
-(pass criterion: 0 failures **and** min-free ≥ 1 GiB). A capacity claim without a measured peak
+**15.5 GiB** was derived from that inequality (pool 1,152,677 tokens, +14.9 %), but it is **not yet
+earned**: the soak that produced the 3.33 GiB margin actually ran on the 13.5 GiB container
+(attribution error caught after the fact — see docs/00). 13.5 GiB is therefore the validated
+production number, and 15.5 GiB stays a candidate until a soak that can prove it ran on it. A capacity claim without a measured peak
 margin is not a claim, it is an outage waiting for round 188.
 
 ### Operational findings worth keeping
