@@ -8,10 +8,16 @@ from acr.index import PrefixIndex
 from acr.trace import synthetic_mix
 
 
-def test_breakeven_bandwidth_is_our_measured_number():
-    """restore beats recompute iff BW > bytes_per_token x prefill_rate (docs/00 §4)."""
+def test_breakeven_bandwidth_tracks_the_resolved_prefill_rate():
+    """restore beats recompute iff BW > bytes_per_token x prefill_rate (docs/00 §4).
+
+    C-1 resolved 2026-09-19 by direct measurement (cold 4K-150K -> 6.8-11.6K tok/s), so the
+    break-even is ~0.63 GB/s, not the ~0.445 GB/s the first draft used. The conclusion is
+    unchanged and now stronger: the measured /data tier (0.413-0.432 GB/s) sits well below it.
+    """
     cost = CostModel()
-    assert math.isclose(cost.breakeven_bw_gbs(), 0.445, rel_tol=0.03)
+    assert math.isclose(cost.breakeven_bw_gbs(), 0.634, rel_tol=0.03)
+    assert cost.breakeven_bw_gbs() > 0.432      # measured /data read+write speed
 
 
 def test_ram_tier_clears_break_even_and_disk_does_not():
