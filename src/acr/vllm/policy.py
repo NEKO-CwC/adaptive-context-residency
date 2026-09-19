@@ -81,10 +81,16 @@ class AcrValuePolicy(CachePolicy):
         self.lambda_io = float(cfg.get("lambda_io", 0.25))
         self.role_weight = dict(cfg.get("role_weight",
                                         {"patient": 1.6, "reviewer": 1.0, "supervisor": 1.0}))
-        self.kv_bytes_per_token = float(cfg.get("kv_bytes_per_token", 57_591.0))
-        self.prefill_tokens_per_s = float(cfg.get("prefill_tokens_per_s", 7_900.0))
+        self.kv_bytes_per_token = float(cfg.get("kv_bytes_per_token", 57_753.0))  # 56.4 KiB, docs/00 §1
+        # 11.1K is the *marginal* cold-prefill rate measured on this engine; the old default of
+        # 7.9K was prompt/e2e under contention and made recompute look 1.4x cheaper than it is.
+        self.prefill_tokens_per_s = float(cfg.get("prefill_tokens_per_s", 11_100.0))
         self.restore_gbs = float(cfg.get("restore_gbs", 52.8))
-        self.block_tokens = int(cfg.get("block_tokens", 0))  # 0 => infer from first block seen
+        # The engine never hands a policy its geometry, and a zero here silently collapses every
+        # score to 0.0 — which turns evict() into "whatever set iteration yields" (measured
+        # 2026-09-20: role/ETA/lease variants produced byte-identical replay results and the policy
+        # lost 14.8 hit-points to the built-in LRU). Default to this build's attention group.
+        self.block_tokens = int(cfg.get("block_tokens", 816))
 
         self.blocks: dict[OffloadKey, BlockStatus] = {}
         self.evictable: set[OffloadKey] = set()
@@ -125,7 +131,7 @@ class AcrValuePolicy(CachePolicy):
                     # An agent that says when it returns is worth believing: fold the ETA into
                     # the hazard by shifting the last-use clock forward to the promised return.
                     m["last_use"] = min(m["last_use"] + float(hints["tool_eta_s"]), now)
-                m["leases"] = float(hints.get("session_lease_count", m["leases"]))
+                m["leases"] = float(hints.get("session_lease_count", hints.get("leases", m["leases"])))
             if key in self.evictable:
                 pass  # recency is captured by last_use; eviction recomputes score
 
@@ -147,7 +153,11 @@ class AcrValuePolicy(CachePolicy):
         candidates = [k for k in self.evictable if k not in protected]
         if len(candidates) < n:
             return None                      # atomic: no state change on failure
-        candidates.sort(key=lambda k: self.score(k, now))
+        # score ties are the norm at cold start (every block has iat<=0 => the floor probability),
+        # so without a tiebreak a "value" policy is strictly worse than LRU. Recency then reuse
+        # count, both ascending: evict the stalest, least-reused first.
+        candidates.sort(key=lambda k: (self.score(k, now), self.meta.get(k, {}).get("last_use", 0.0),
+                                       self.meta.get(k, {}).get("uses", 0)))
         out = [(k, self.blocks[k]) for k in candidates[:n]]
         for k, _ in out:
             self.remove(k)
