@@ -119,3 +119,16 @@ margin is not a claim, it is an outage waiting for round 188.
 3. **Premortem capture is what made this diagnosable.** `deploy_qwen.sh` now dumps status + 200 log
    lines of the *outgoing* container before removing it whenever it is unhealthy/dead. Without it we
    had two "engine died" events with no traceback and were reasoning from memory counters.
+
+## 15.5 GiB earned its gate on the second attempt (2026-09-19 14:1x)
+
+With the attribution tool fixed, the candidate ran its own 300×3 growing-prefix soak and passed:
+**0 failures, 671 s, peak 43,506 MiB/card, min free 2,011 MiB**, container id and
+`--kv-cache-memory-bytes` identical before and after. It is now the production config and the
+auto-restore target (`PROD-PATCHED-15.5`, pool 1,152,677 tokens).
+
+Two numbers worth keeping: the margin inequality over-predicted risk (said ~1.3 GiB, measured
+2.0 GiB), and the same soak at 13.5 GiB took 1,229 s while at 15.5 GiB it took 671 s — a
+**1.8× throughput difference from 2 GiB of KV reservation**, with co-resident agent traffic being
+the common condition. That gap is the honest, measured version of "why capacity matters", and it
+came with the box already running nothing but our own harness.

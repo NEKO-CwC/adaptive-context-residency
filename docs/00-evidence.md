@@ -19,8 +19,8 @@ The whole design is only as good as this table, so the disagreement is recorded 
 | capacity at 13.5 GiB/card | 1,003,197 tokens | boot log |
 | capacity at 15 GiB/card | 1,110,107 tokens | boot log (C5) |
 | capacity at 17 GiB/card | 1,263,788 tokens (+26 %) | boot log — **not deployable**, see the retraction below |
-| capacity at 15.5 GiB/card | 1,152,677 tokens (+14.9 %) | **candidate**: booted and probed twice, never soaked as itself (see the attribution note below) |
-| capacity at 13.5 GiB/card | **1,003,197 tokens** | **production now**: 300×3 growing-prefix soak, 0 failures, peak 41.12 GiB/card, **3.33 GiB min free**, real agent traffic co-resident |
+| capacity at **15.5 GiB/card** | **1,152,677 tokens (+14.9 %)** | **production, gated with proven attribution** (container id + `--kv-cache-memory-bytes` sampled before and after): 300×3 growing-prefix, 0 failures, 671 s, peak 43,506 MiB/card, **min free 2,011 MiB** |
+| capacity at 13.5 GiB/card | 1,003,197 tokens | validated manual alternative (300×3 soak, min free 3.33 GiB); costs 12.9 % of the pool |
 | capacity linearity | ≈74,300 tokens / GiB / card | 3-point fit of the rows above |
 | block / prefix-match granularity | **816 tokens** | boot log verbatim: *"Setting attention block size to 816 tokens to ensure that attention page size is >= mamba page size"* + *"Padding mamba page size by 1.62%…"* (all 4 ranks). `hash_block_size` = `prefix_match_unit` if set, else GCD of prefix-cacheable group sizes (`v1/core/kv_cache_utils.py:612-672`) |
 
@@ -154,8 +154,9 @@ included), which raises the non-KV peak and the block churn; its 300 rounds also
 
 Consequence for how capacity is chosen here: headroom must be measured **with production traffic
 co-resident**, not by a dedicated soak, and the reservation must be derived from a margin
-inequality rather than from "what fits". Hence 15.5 GiB (3.33 GiB measured margin), and hence the
-`kv ladder` row above no longer describes something we are willing to run.
+inequality rather than from "what fits". Hence the reservation is derived from the inequality, not from what fits. Measured at 15.5 GiB:
+min free **2,011 MiB** (the inequality predicted ~1.3 GiB, so the estimate was conservative by
+~0.7 GiB) — and at 17 GiB it went negative, which is what the retraction above is about.
 
 ### Attribution rule for capacity gates (learned by violating it)
 
