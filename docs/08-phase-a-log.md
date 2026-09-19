@@ -257,3 +257,35 @@ already reserved as the second extension point.
 14 `*Spec` classes and only four are accepted; computing this model's group specs on the CPU in a
 throwaway container would say whether the fix is a 3-line branch or a new manager, without another
 production boot. That is the next thing to do before asking for another window.
+
+### N7 (no restart) — the offending class is named: `CircularBufferSpec`
+
+Two independent levels of evidence, both first-party:
+
+* the only spec constructed anywhere in this model's package that is **not** in the connector's
+  accepted set is `vllm/models/qwen3_8_flash_next/common/qsa_cache.py:785 → CircularBufferSpec(`;
+* the same W1d boot names the live subsystem: attention backend `QWEN38_FLASH_NEXT_EXP_QSA_STATE`,
+  and production runs `_qsa_mqa_paged_kernel` / `_expand_qsa_indices_kernel` at inference time — the
+  group is real, not a dead branch.
+
+Hierarchy read out of the installed package: `CircularBufferSpec(AttentionSpec)` — not
+`FullAttentionSpec`, not `SlidingWindowSpec`, not `ChunkedLocalAttentionSpec`, not `MambaSpec`, so
+it falls through `get_sliding_window_size_in_chunks` into the bare assert at
+`offloading/scheduler.py:125`.
+
+Consequence for W1e, stated as a fork rather than a guess:
+
+1. **~5-line upstream branch** — give `get_sliding_window_size_in_chunks` a `CircularBufferSpec`
+   case (a ring of capacity C behaves window-like: `cdiv(C, tokens_per_chunk)`). That clears *config*.
+   It says nothing about whether a ring buffer's live slots have stable hashes or a representable
+   store/load chunk at all — which is exactly the class of "boots but restores wrong bytes" failure
+   G-1 exists to catch. So this path must be measured, not trusted.
+2. **Our own `OffloadingSpec` + manager** through the factory seam (`spec_module_path`), where the
+   offload unit is **group-typed**: this tree has ≥4 spec kinds with different token granularity
+   (attention 816, GDN state group 8/16, MLA-shaped and circular ones). The engine's own log proves
+   the heterogeneity: *"Setting attention block size to 816 tokens to ensure that attention page size
+   ≥ mamba page size"* + *"Padding mamba page size by 1.62%"*.
+
+Either way the paper claim sharpens into something model-agnostic and testable: **a KV offload tier
+whose unit is not typed per KV-cache group cannot serve a hybrid model** — and stock vLLM's tier is
+exactly such a library.
