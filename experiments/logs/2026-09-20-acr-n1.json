@@ -1,0 +1,91 @@
+{
+ "checks": [
+  {
+   "check": "factory imports acr.vllm.policy.AcrValuePolicy",
+   "ok": true,
+   "evidence": {
+    "class": "acr.vllm.policy.AcrValuePolicy"
+   }
+  },
+  {
+   "check": "__init__(cache_capacity) matches the ABC",
+   "ok": true,
+   "evidence": {}
+  },
+  {
+   "check": "CPUOffloadingManager accepts the out-of-tree policy",
+   "ok": true,
+   "evidence": {}
+  },
+  {
+   "check": "retained 63/80 blocks still HIT after truncating the last 17",
+   "ok": true,
+   "evidence": {
+    "hits_before": 80,
+    "hits_after_truncate": 63
+   }
+  },
+  {
+   "check": "one-shot block not admitted, twice-seen block admitted",
+   "ok": true,
+   "evidence": {
+    "accepted": 1,
+    "twice_seen_in": true,
+    "one_shot_in": false
+   }
+  },
+  {
+   "check": "evict(n) never returns a mark_non_evictable medical key",
+   "ok": true,
+   "evidence": {
+    "evicted": 6,
+    "medical_leaked": 0,
+    "medical_total": 4
+   }
+  },
+  {
+   "check": "(hash, group_idx) keys do not collide",
+   "ok": true,
+   "evidence": {
+    "attention": "HIT",
+    "state": "MISS",
+    "decoded": [
+     0,
+     1
+    ]
+   }
+  },
+  {
+   "check": "H1: attention-only offload is loadable (state group absent)",
+   "ok": false,
+   "evidence": {
+    "blocker": "H1 false at manager level",
+    "result": "AssertionError: Block b'+\\x8d\\xc9\\x8b0\\xa1\\x87\\x14&\\xed\\xe3\\xa1<5\\x91f\\xaa\\xbd\\xf5\\x07\\xbdwBd\\x91\\x1e\\xa4\\xe8\\x82\\xc4\\x8f\\xb4\\x00\\x00\\x00\\x01' not found in cache"
+   }
+  },
+  {
+   "check": "evict(n) never returns a mark_non_evictable medical key",
+   "ok": true,
+   "evidence": {
+    "evicted": 6,
+    "medical_leaked": 0,
+    "medical_total": 4
+   }
+  },
+  {
+   "check": "LRU and ACR disagree on the victim (the divergence is the contribution)",
+   "ok": false,
+   "evidence": {
+    "acr_keeps_future_value": false,
+    "lru_evicts_stale": true
+   }
+  },
+  {
+   "check": "pinned medical KV survives eviction under ACR",
+   "ok": true,
+   "evidence": {}
+  }
+ ],
+ "passed": 9,
+ "total": 11
+}
