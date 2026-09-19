@@ -289,3 +289,26 @@ Consequence for W1e, stated as a fork rather than a guess:
 Either way the paper claim sharpens into something model-agnostic and testable: **a KV offload tier
 whose unit is not typed per KV-cache group cannot serve a hybrid model** — and stock vLLM's tier is
 exactly such a library.
+
+### 2026-09-20 ~04:20Z — the tier is reachable with a 5-line patch, validated offline
+
+`deploy/gpu/patches/sets/acr/` = production set + `05-qsa-circular-buffer-offload.patch`, generated
+by diffing an edit of the installed file (never hand-written hunks) and validated in a fresh
+container off the pinned image digest:
+
+```
+APPLIED 01..05                       apply.sh rc=0
+ALREADY_APPLIED 01..05               apply.sh --check rc=0   ← the idempotence that crash-looped us on 09-18
+circular(8) vs chunk 816 → 1 ; vs chunk 8 → None ; full/mamba/swa unchanged (None/1/6)
+SchedulerOffloadConfig.from_spec → completes, groups=3, num_workers=4
+```
+
+So the honest position for the paper and for the next window: **the library's RAM tier is one
+5-line group-aware branch away from booting on this hybrid tree** — the three walls were (1) our own
+`expandable_segments` export, (2) hash granularity vs the 8-token group (`--prefix-match-unit 8`),
+(3) `scheduler.py:125`'s unguarded `FullAttentionSpec` assert. None of them is about policy; all of
+them are about the tier assuming a single, full-attention KV-cache group.
+
+Still unproven, and it is the only thing that matters for production: whether store/restore of a
+ring whose live slots move is **byte-correct** (G-1), and what a real restore costs (M-1). Both need
+the window; the command is in `sets/acr/README.md`.
