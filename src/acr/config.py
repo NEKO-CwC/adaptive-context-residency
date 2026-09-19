@@ -39,7 +39,10 @@ class CostModel:
     kv_bytes_per_token: float = 57_591.0     # 13.5 GiB x 4 ranks / 1,003,197 tokens (measured)
     prefill_tokens_per_s: float = 11_000.0   # C-1 resolved 2026-09-19: 4K-150K cold -> 6.8-11.6K tok/s
     prefill_tokens_per_s_alt: float = 7_900.0     # the earlier 30K probe value, kept for sensitivity
-    decode_tokens_per_s: float = 118.0       # single-stream decode (measured)
+    decode_tokens_per_s: float = 118.0       # effective production mix, i.e. contended multi-agent
+                                             # decode; solo greedy is 273/161/135 by content
+                                             # predictability (docs/00 §2) — do not use as "the"
+                                             # single-stream rate
     request_overhead_s: float = 0.36         # warm short-request TTFT floor (measured)
 
     def recompute_seconds(self, tokens: float) -> float:

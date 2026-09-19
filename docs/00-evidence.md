@@ -41,14 +41,24 @@ Derived (C-derived):
 
 | quantity | value | provenance |
 | --- | --- | --- |
-| decode, single stream | 118 tok/s | `tune/live_scaling_probe.py` |
-| decode, 4 concurrent | 132–176 tok/s per stream, aggregate ≈5× | same |
-| cold prefill, 30K fresh tokens | 3.8 s → **7.9K tok/s** | same |
+| cold prefill, marginal rate | **11.1–13.3K tok/s** (4K→16K: 13.3K; 16K→64K: 12.0K; 64K→150K: 11.1K) | `tune/results/g1-pre.json`, differences of TTFT between sizes so fixed overhead and decode cancel out |
+| cold prefill, average incl. overhead | 7.2K (4K prompt) → 11.3K (150K prompt) | same; the old "7.9K tok/s" was this kind of number (prompt/**e2e**) measured while other requests were sharing the engine — it is not a rate, and it is superseded |
+| decode, single stream, by content | **273 / 161 / 135 tok/s** for easy(counting) / medium(prose) / hard(invented tokens) | `tune/` probe, 256-token greedy generations, repeated within 2% |
+| decode, 4 concurrent, medium | 113–120 tok/s per stream, **469 aggregate** | same — this reproduces the older "118 tok/s" figure exactly, which means that number was a *contended* measurement, not a single-stream baseline |
+| MTP acceptance, by content | 100 % (4.00/step) / 50 % (2.00) / 37.6 % (1.50); per-position medium = 77/56/36/31 % | `/metrics` `spec_decode_num_accepted_tokens_per_pos_total` deltas around each probe |
+
+**Decode throughput is not a constant on this stack.** With `num_speculative_tokens=4`, speed is set by
+draft acceptance, which is set by content predictability: 273 tok/s on trivially predictable output
+versus 135 tok/s on invented tokens, on the same engine and the same config. Any latency model that
+uses one decode number will be wrong by ~2× in one direction or the other, so the simulator now
+takes `decode_tokens_per_s` as the *effective production mix* value and the tables above are the
+source. It also means patient-role output (strict JSON with per-turn dynamic enums) behaves like the
+**hard** row, not the easy one.
 | warm (prefix-cached) short request TTFT | 0.36–0.37 s | same |
 | short-request TTFT during a 30K cold storm | **3.42 s (9.2×)** | same |
 | prefix-cache hit ratio, cumulative | 73.8 %; 93–94 % in steady multi-session windows | `/metrics` |
 | MTP acceptance | 27,904/56,848 tokens ≈ 1.96 of 4 | `/metrics` |
-| growing-prefix fault family exposure | 6 harness runs, 590+ rounds, 0 crash / 0 NaN / 0 preemption | `tune/*/results.csv` |
+| growing-prefix fault family exposure | 7 harness runs since, incl. 300×3 PASS at 13.5 and 15.5 GiB; **one FAIL at 17 GiB (CUDA OOM, not the fault family)** | `tune/results/soak-*`, `tune/../premortem-oom-20260919.txt` |
 
 ### C-conflict: cold-prefill throughput at long context
 
