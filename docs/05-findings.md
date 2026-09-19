@@ -182,3 +182,41 @@ Consequences for how the project runs from now on:
   matching;
 - this is the second self-inflicted result in this doc (F-1 also came from a bug) — which is an
   argument for measuring on the real engine (phase A) before building more policy logic.
+
+## F-10 — the ranking contribution is real but **conditional on RAM being scarce**, and our box is not
+
+Time-interleaved ward replay (12 coding sessions over a shared 120-block repo prefix + 20 patient
+sessions, 40 turns each, coder cadence 8 s / patient cadence 45 s), driven through the deployed
+`CPUOffloadingManager`, unique working set ≈ 1,440 blocks of 816 tokens:
+
+| RAM (blocks → tokens) | LRU hit | ACR hit | Δ hit | Δ recompute-seconds |
+| --- | --- | --- | --- | --- |
+| 1200 → 0.98 M | 98.4 % | 97.4 % | −0.98 pt | +62 s |
+| 600 → 0.49 M | 89.9 % | 85.2 % | −4.69 pt | +295 s |
+| 500 → 0.41 M | 82.5 % | 85.3 % | **+2.77 pt** | −174 s |
+| 450 → 0.37 M | 79.4 % | 84.3 % | +4.90 pt | −308 s |
+| 400 → 0.33 M | 76.7 % | 84.0 % | +7.30 pt | −459 s |
+| 350 → 0.29 M | 74.3 % | 82.7 % | **+8.36 pt** | −525 s |
+| 300 → 0.25 M | 72.4 % | 79.8 % | +7.39 pt | −464 s |
+| 240 → 0.20 M | 70.6 % | 76.4 % | +5.78 pt | −363 s |
+
+**Crossover ≈ 35–42 % of the unique working set resident.** Below it, value ranking wins and the
+latency class wins most: at 350 blocks patient hit goes 22.4 % → 40.5 % *and* coding 88.2 % → 93.9 %
+— a Pareto move, not a trade. Above it, recency is the better prior and our ranking actively hurts.
+
+Consequence, stated against ourselves: this box has 359 GiB of host RAM ≈ 8,200 blocks ≈ 6.7 M
+tokens, i.e. **an order of magnitude above the crossover for any plausible session mix**. So the
+production configuration of the tier is the library's `lru`/`arc` + `store_threshold`, and the value
+function earns its keep only where RAM is deliberately capped (co-tenancy, or a residency budget
+chosen to bound host-memory pressure). Any claim of the form "signals buy N×" must be quoted with
+its capacity condition or it is false at our own operating point.
+
+Also corrected on the way here, because each was measured rather than assumed:
+* the first mixed stream was **two sequential phases** (all coders, then all patients) — under that
+  arrival order recency is optimal by construction and the policy lost 14.8 pt. That measured the
+  generator, not the policy; interleaving it changed the sign of the result.
+* the replay **had no clock** (turns processed back-to-back), which made every recency/ETA term
+  meaningless; it now advances a virtual clock from the trace's own gaps.
+* the policy's geometry defaulted to `block_tokens=0` with a comment claiming inference that was
+  never implemented, so `score()` returned 0.0 for every block and eviction degraded to set
+  iteration order. See docs/08 / commit bf47d23.

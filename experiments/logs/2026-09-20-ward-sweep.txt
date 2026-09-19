@@ -1,0 +1,20 @@
+streams: real=343 turns ≈66.19M token-visits · mixed=12 coders×40 + 20 patients×12
+  mixed 500   lru              blocks=   500 lookups=   85440 hit=82.5% stored=  14923 wasted= 14423 recompute= 12177.2K tok (  1097s) errors=0 (0s)
+  mixed 500   AcrValuePolicy   blocks=   500 lookups=   85440 hit=85.3% stored=  12556 wasted= 12056 recompute= 10245.7K tok (   923s) errors=0 (1s)
+  → Δ: hit +2.77%, recomputed -1931472 tok, wasted stores -2367, recompute-seconds -174s
+  mixed 450   lru              blocks=   450 lookups=   85440 hit=79.4% stored=  17580 wasted= 17130 recompute= 14345.3K tok (  1292s) errors=0 (0s)
+  mixed 450   AcrValuePolicy   blocks=   450 lookups=   85440 hit=84.3% stored=  13395 wasted= 12945 recompute= 10930.3K tok (   985s) errors=0 (1s)
+  → Δ: hit +4.90%, recomputed -3414960 tok, wasted stores -4185, recompute-seconds -308s
+  mixed 400   lru              blocks=   400 lookups=   85440 hit=76.7% stored=  19949 wasted= 19549 recompute= 16278.4K tok (  1467s) errors=0 (0s)
+  mixed 400   AcrValuePolicy   blocks=   400 lookups=   85440 hit=84.0% stored=  13709 wasted= 13309 recompute= 11186.5K tok (  1008s) errors=0 (1s)
+  → Δ: hit +7.30%, recomputed -5091840 tok, wasted stores -6240, recompute-seconds -459s
+  mixed 350   lru              blocks=   350 lookups=   85440 hit=74.3% stored=  21963 wasted= 21613 recompute= 17921.8K tok (  1615s) errors=0 (0s)
+  mixed 350   AcrValuePolicy   blocks=   350 lookups=   85440 hit=82.7% stored=  14822 wasted= 14472 recompute= 12094.8K tok (  1090s) errors=0 (1s)
+  → Δ: hit +8.36%, recomputed -5827056 tok, wasted stores -7141, recompute-seconds -525s
+  mixed 300   lru              blocks=   300 lookups=   85440 hit=72.4% stored=  23604 wasted= 23304 recompute= 19260.9K tok (  1735s) errors=0 (0s)
+  mixed 300   AcrValuePolicy   blocks=   300 lookups=   85440 hit=79.8% stored=  17294 wasted= 16994 recompute= 14111.9K tok (  1271s) errors=0 (1s)
+  → Δ: hit +7.39%, recomputed -5148960 tok, wasted stores -6310, recompute-seconds -464s
+  mixed 240   lru              blocks=   240 lookups=   85440 hit=70.6% stored=  25133 wasted= 24893 recompute= 20508.5K tok (  1848s) errors=0 (0s)
+  mixed 240   AcrValuePolicy   blocks=   240 lookups=   85440 hit=76.4% stored=  20195 wasted= 19955 recompute= 16479.1K tok (  1485s) errors=0 (1s)
+  → Δ: hit +5.78%, recomputed -4029408 tok, wasted stores -4938, recompute-seconds -363s
+wrote /tmp/acr-sweep.json · manager call errors across all arms: 0

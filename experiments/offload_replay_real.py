@@ -60,6 +60,9 @@ class Runner:
         self.served: dict[str, set[bytes]] = {}      # session -> blocks it believes are in RAM
         self.stats = dict(lookups=0, hits=0, misses=0, stored=0, restored_tokens=0,
                           recomputed_tokens=0, wasted_stores=0, errors=0)
+        # per-role view: the product question is not aggregate hit ratio but whether the latency
+        # class is the one that survives pressure.
+        self.by_role: dict[str, dict[str, int]] = {}
 
     def _safe(self, fn, *a, **kw):
         try:
@@ -85,13 +88,17 @@ class Runner:
         present = self.served.setdefault(session, set())
         # lookup every block of the stream: a HIT means the tier can serve it, a MISS means the
         # engine will prefill it and, if worth caching, store it on the way out
+        role = (params.get("acr") or {}).get("role", "?")
+        br = self.by_role.setdefault(role, {"lookups": 0, "hits": 0, "recomputed": 0})
         cold = []
         for key in keys:
             self.stats["lookups"] += 1
+            br["lookups"] += 1
             r = self._safe(self.m.lookup, key, c)
             name = getattr(r, "name", "MISS")
             if name in ("HIT", "HIT_PENDING"):
                 self.stats["hits"] += 1
+                br["hits"] += 1
                 self.stats["restored_tokens"] += BLOCK
                 self._safe(self.m.prepare_load, [key], c)
                 self._safe(self.m.complete_load, [key], c)
@@ -101,6 +108,7 @@ class Runner:
         self._safe(self.m.touch, keys, c)
         if cold:
             self.stats["recomputed_tokens"] += len(cold) * BLOCK
+            br["recomputed"] += len(cold) * BLOCK
             out = self._safe(self.m.prepare_store, cold, c)
             if out is not None:
                 accepted = list(out.keys_to_store)
@@ -135,25 +143,42 @@ def stream_real(path: pathlib.Path) -> list[tuple[str, list[bytes], dict]]:
     return out
 
 
-def stream_mixed(coders: int, patients: int, shared_repo: int, turns: int) -> list[tuple[str, list[bytes], dict]]:
-    """Ward model: N coding sessions over one long shared repo prefix, M patient sessions, short."""
-    ev: list[tuple[str, list[bytes], dict]] = []
+def stream_mixed(coders: int, patients: int, shared_repo: int, turns: int,
+                 coder_gap: float = 8.0, patient_gap: float = 45.0):
+    """Ward model: N coding sessions over one long shared repo prefix, M patient sessions, short —
+    and, critically, **interleaved in time** the way a real ward is. The first version emitted all
+    coder turns and then all patient turns, which is a two-phase arrival pattern where recency is
+    near-optimal by construction and any forward-looking ranking is punished by the time断层; it
+    measured the stream generator, not the policy.
+
+    Each session keeps its own cadence and a staggered start; the stream is merged by timestamp and
+    carries the real gap to the previous event, so the policy's clock sees seconds for tool waits
+    and tens of seconds for human typing.
+    """
+    timed: list[tuple[float, str, list[bytes], dict]] = []
     repo = [k(f"repo:{i}") for i in range(shared_repo)]
-    for s in range(coders):
-        sess = f"coder-{s}"
+    for c in range(coders):
+        sess = f"coder-{c}"
         own = [k(f"{sess}:{i}") for i in range(turns)]
+        start = (c % 4) * 2.0
         for t in range(1, turns + 1):
-            # a coding turn arrives after tool execution: seconds, not microseconds
-            ev.append((sess, repo + own[:t],
-                       {"acr": {"role": "coding", "session": sess, "tool_eta_s": 90.0, "leases": 1}}, 8.0))
-    for p in range(patients):
-        sess = f"patient-{p}"
+            timed.append((start + (t - 1) * coder_gap, sess, repo + own[:t],
+                          {"acr": {"role": "coding", "session": sess, "tool_eta_s": 90.0,
+                                   "leases": 1}}))
+    for pt in range(patients):
+        sess = f"patient-{pt}"
         base = [k(f"case:{i}") for i in range(2)]                 # 2 blocks ≈ shared case truth
         own = [k(f"{sess}:{i}") for i in range(turns)]
+        start = (pt % 5) * 9.0
         for t in range(1, turns + 1):
-            # a patient answers after reading + typing: tens of seconds
-            ev.append((sess, base + own[:t],
-                       {"acr": {"role": "patient", "session": sess, "tool_eta_s": 3.0, "leases": 1}}, 45.0))
+            timed.append((start + (t - 1) * patient_gap, sess, base + own[:t],
+                          {"acr": {"role": "patient", "session": sess, "tool_eta_s": 3.0,
+                                   "leases": 1}}))
+    timed.sort(key=lambda x: x[0])
+    ev, prev = [], 0.0
+    for ts, sess, keys, params in timed:
+        ev.append((sess, keys, params, ts - prev))
+        prev = ts
     return ev
 
 
@@ -169,10 +194,13 @@ def run(label: str, events, blocks: int, policies=(LRU, ACR)) -> dict:
         res[pol[0]] = dict(r.stats, hit_ratio=round(hit, 4), secs=round(time.time() - t0, 1),
                            recompute_s=round(r.stats["recomputed_tokens"] / PREFILL_TOK_S, 1),
                            restore_s=round(r.stats["restored_tokens"] * RESTORE_S_PER_TOK, 1))
+        roles = " ".join(f"{rr}:hits={d['hits']/max(d['lookups'],1):5.1%}/recomp={d['recomputed']/1e3:6.0f}K"
+                         for rr, d in sorted(r.by_role.items()))
         print(f"  {label:11s} {pol[0]:16s} blocks={blocks:6d} lookups={r.stats['lookups']:>8} "
               f"hit={hit:5.1%} stored={r.stats['stored']:>7} wasted={r.stats['wasted_stores']:>6} "
               f"recompute={r.stats['recomputed_tokens']/1e3:8.1f}K tok ({r.stats['recomputed_tokens']/PREFILL_TOK_S:6.0f}s) "
               f"errors={r.stats['errors']} ({time.time()-t0:.0f}s)")
+        print(f"              {roles}")
     a, b = res[policies[0][0]], res[policies[1][0]]
     print(f"  → Δ: hit {b['hit_ratio']-a['hit_ratio']:+.2%}, "
           f"recomputed {b['recomputed_tokens']-a['recomputed_tokens']:+d} tok, "
@@ -194,8 +222,7 @@ def main() -> int:
 
     report = []
     # capacity in blocks of 816 tokens: 1.6M tokens ≈ 1960 blocks ≈ 91 GiB at 56.4 KiB/token
-    for blocks in (2400, 1200, 600, 300):
-        report.append(run(f"real {blocks}", real, blocks))
+    for blocks in (500, 450, 400, 350, 300, 240):
         report.append(run(f"mixed {blocks}", mixed, blocks))
     json.dump(report, open(a.out, "w"), indent=1)
     errs = sum(p["errors"] for r in report for p in r["policies"].values())
