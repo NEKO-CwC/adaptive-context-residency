@@ -80,6 +80,17 @@ useful request. Two routes:
 - **upstream hook**: a ~10-line `admit()` on `CachePolicy` with a default-True implementation.
   Good upstream candidate; do it after the simulator shows admission matters.
 
+
+
+**Correction (2026-09-20, read from the deployed `kv_offload/cpu/spec.py:65-135`):** a *deserving*
+admission filter does exist natively — `store_threshold` ("how many times a block must appear in
+`lookup()` before it is eligible for CPU offloading", `< 2` disables it, `STORES_SKIPPED` counts the
+drops) — and `eviction_policy` / **`cache_policy_module_path`** / `max_tracker_size` are first-class
+`kv_connector_extra_config` keys, so ACR's policy is loadable with no fork. What is still genuinely
+absent: admission by *predicted value or role* (the threshold is a plain reuse counter), a per-step
+`max_load_tokens` bandwidth cap, and transaction-scoped invalidation. The novelty claim must be
+stated against that narrower gap, not against "no admission at all".
+
 ## 4. Configuration we would run with (promotion window only)
 
 ```json
