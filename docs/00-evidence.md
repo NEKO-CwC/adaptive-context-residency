@@ -109,3 +109,33 @@ The request "keep 1×1M + 2×500K + several ≤200K resident at once" = 2.2–2.
 hardware-impossible requirement into a scheduling problem, which is the reason this repo exists.
 Gated entirely on §5 of docs/04: does the offload path preserve KV bit-exactly for *this* hybrid
 GDN + MTP + `inc` + patched build.
+
+## 6. What actually bounds the pool: the page-equality identity (measured 2026-09-19)
+
+Two boots, one variable (`--mamba-ssm-cache-dtype bfloat16`, i.e. the GDN recurrent state
+halved), both at `--kv-cache-memory-bytes 17 GiB/card`:
+
+| state dtype | attention block size (log) | mamba page padding | pool tokens |
+| --- | --- | --- | --- |
+| float32 (`auto`, from HF config) | 816 | 1.62 % | 1,263,788 |
+| bfloat16 | **432** | 3.10 % | **1,276,495** (+1 %) |
+
+Halving the state cost nothing in capacity and bought exactly a 2× finer prefix granularity.
+That is not a coincidence — it is forced by the engine's own invariant. With one attention group
+(A = bytes/token) and one recurrent-state group (S = bytes per checkpoint, independent of block
+size), the allocator demands equal pages: `A·B = S`, so `B = S/A` and
+
+```
+capacity = pool_bytes / page_bytes × B = pool_bytes / (A·B) × B = pool_bytes / A
+```
+
+**Capacity is set by attention bytes per token. Recurrent state is free in capacity and is paid
+for in granularity.** The identity reproduces both measured points (predicted B = 413 vs measured
+432, within padding), and it makes one falsifiable prediction: `--kv-cache-dtype fp8` should nearly
+double the pool (→ ~2.55 M tokens at 17 GiB) while pushing B back to ~825 — unless the bf16 state
+change is kept, in which case B stays near 432 at the same doubled capacity.
+
+Corollary for this box: `17 GiB` is *already* "all the VRAM minus a small margin". Measured peak
+non-KV resident (after CUDA graph capture and 300×3 harness load) is **7.41 GiB/card**, so the
+ceiling is 44.99 − 20.14 − 7.41 ≈ **17.44 GiB**, and the driver reported 23 MiB free at 17 GiB.
+Any capacity growth must come from `A`, not from claiming more GiB.
