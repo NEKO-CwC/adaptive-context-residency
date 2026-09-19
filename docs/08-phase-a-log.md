@@ -219,3 +219,41 @@ granularity. Two follow-ons, each one flag:
   (`ncu-a-watchdog`) so it cannot die with an agent session.
 - End state verified read-only: healthy, no `--kv-transfer-config` in PID 1, no deploy marker, real
   generate returns.
+
+## 2026-09-20 19:28–19:34Z — W1d: two walls cleared, the third is structural
+
+`--alloc plain --kvtransfer lru --pmu 8` (connector + `--prefix-match-unit 8`), evidence preserved
+by the new `preserve_evidence` trap into `tune/results/boot-failure-W1d-pmu8-lru.txt` (59 KB):
+
+- `grep -c "not divisible by tokens_per_hash"` → **0**. The `offloading/config.py:60` assertion is
+  gone, i.e. **`--prefix-match-unit 8` does clear it**, and the boot proceeded all the way to
+  `factory.py:62 Creating v1 connector with name: OffloadingConnector` →
+  `factory.py:57 Creating offloading spec with name: CPUOffloadingSpec`. The tier even created its
+  host region (`shared_offload_region.py:304 … /dev/shm/vllm_offload_<uuid>.mmap`).
+- It then died at a third, different place, with no message beyond an assertion:
+
+  ```
+  offloading/scheduler.py:193-195  for idx, tokens_per_block in enumerate(spec.tokens_per_block):
+                                     kv_spec = kv_cache_config.kv_cache_groups[idx].kv_cache_spec
+                                     sw = get_sliding_window_size_in_chunks(kv_spec, …)   # unconditional
+  offloading/scheduler.py:112-126   handles SlidingWindowSpec / ChunkedLocalAttentionSpec /
+                                    MambaSpec (→1), then: assert isinstance(kv_spec, FullAttentionSpec)
+  ```
+
+  So the connector's **scheduler-side config cannot represent this model's group set**: one of our
+  KV-cache groups carries a spec class outside those four, and the loop has no guard. The
+  `CudaIPCTypes.cpp:16 Producer process has been terminated` lines that followed — which I had
+  guessed were a PLE/IPC conflict — are cleanup noise from the dying engine, not a cause. That
+  hypothesis is dead.
+
+**Consequence for the project, stated plainly:** phase A's question ("can we just use the library?")
+is answered **no** for the RAM tier on this model class. Two of the three walls were configuration
+we control (`expandable_segments`, hash granularity); the third is code inside the connector's
+spec handling. Either it gets an upstream branch (if our group's spec turns out to be a
+`MambaSpec`-shaped thing) or ACR ships its own `OffloadingSpec`/manager — which is what docs/01
+already reserved as the second extension point.
+
+**Open evidence gap (N7, no restart):** name the offending spec class. `kv_cache_interface` exposes
+14 `*Spec` classes and only four are accepted; computing this model's group specs on the CPU in a
+throwaway container would say whether the fix is a 3-line branch or a new manager, without another
+production boot. That is the next thing to do before asking for another window.
