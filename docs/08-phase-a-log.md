@@ -312,3 +312,27 @@ them are about the tier assuming a single, full-attention KV-cache group.
 Still unproven, and it is the only thing that matters for production: whether store/restore of a
 ring whose live slots move is **byte-correct** (G-1), and what a real restore costs (M-1). Both need
 the window; the command is in `sets/acr/README.md`.
+
+### 2026-09-20 08:53–09:03Z — W1e: all three walls cleared, the tier reached the scheduling loop
+
+`--patchset acr --kvtransfer arc --alloc plain --pmu 8 --devmode on`. The engine **started, loaded,
+captured graphs, and entered the busy loop**; it died at 09:03:14 inside the *first* scheduling steps:
+
+```
+vllm/v1/core/sched/scheduler.py:999   self._mamba_block_aligned_split(...)
+vllm/v1/core/sched/scheduler.py:432   if tail_boundary and self.use_eagle_block_drop:
+AttributeError: 'AsyncScheduler' object has no attribute 'use_eagle_block_drop'
+```
+
+So: wall 1 (our `expandable_segments` export) ✓, wall 2 (`tokens_per_hash` vs the 8-token group,
+cleared by `--pmu 8`) ✓, **wall 3 (`FullAttentionSpec` assert) ✓ — patch 05 works in the real engine,
+not just in the offline probe.** `--prefix-match-unit 8` is *required* for the tier (the QSA group is
+8 tokens; only a hash granularity ≤ 8 satisfies `config.py:60`), and it activates the fine-grained
+`tail_boundary` branch that has never run before — which references an attribute this build never
+defines. Full evidence: `tune/results/boot-failure-W1e-acr-arc.txt` (61 KB, saved by the
+`preserve_evidence` hook added the same day).
+
+Production restored to `PROD-PATCHED-15.5` at 09:03:48Z: no connector, no `--pmu`, healthy, real
+generate verified, no marker left. Next step is small and offline-first: find where
+`use_eagle_block_drop` should come from (a config field the scheduler failed to copy) and add it as
+patch 06 — the RAM↔HBM path is now one missing attribute away from a first real boot+restore.
