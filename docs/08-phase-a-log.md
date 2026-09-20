@@ -547,3 +547,24 @@ tree has NOT removed the ring from the *lookup* groups** (old-05 shape — ring 
 `full_attention_groups`) — the fix is confirmed wrong-or-not-applied, and the width hypothesis is
 still not the cause. All labels here are EXECUTED (offline replay); the production numbers are the
 next window to confirm.
+
+### 2026-09-20 ~17:35Z — W6 falsifies the ring-veto explanation in production (tier line halted)
+
+W6 booted with patch 08 live (ring excluded from `_sliding_window_groups`/`_lookup_groups`; verified
+by `grep -c is_circular_buffer_group` = 6 in the running container) and reran the natural-eviction
+test: A cold 16.97 s, flood 1,385,248 tokens (> the 1,152,677-token pool), C re-send 10.87 s with
+**`CPU_to_GPU` still exactly 0.0** and **`kv_offload_size_count` = 0 observations on the load side** —
+not a failed load, no load attempted at all — while re-storing 1.92 GB. Cumulative GPU→CPU: 117.6 GB.
+
+Per the criterion registered before the window ("if it stays 0.0, the ring is not the cause and the
+tier line stops here"), the tier line is halted. Corrected conclusions:
+- the ring veto is real **as a code path** (proven by the offline isolation harness) but is **not**
+  what is firing in production;
+- therefore the offline harness's fake-residency proof established that a path exists, not that it is
+  the active one — a methodological limit worth remembering: an isolation harness cannot substitute
+  for a trace from the live process;
+- the load path has now failed to trigger under four distinct configurations (16 GiB, 64 GiB, 96 GiB,
+  128 GiB tiers; flush-based and natural-eviction probes; with and without patches 05/06/08), while
+  the store path works and is byte-consistent (identical greedy text, dlogprob within noise floor).
+- Production restored to `PROD-PATCHED-15.5` and verified (kv 16642998272, seqs 4, conn=0, dev=0,
+  4 patches, pool 1,152,677, real generate OK). One leaked 96 GiB `/dev/shm` region was reaped.
