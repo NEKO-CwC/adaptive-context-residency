@@ -568,3 +568,26 @@ tier line stops here"), the tier line is halted. Corrected conclusions:
   the store path works and is byte-consistent (identical greedy text, dlogprob within noise floor).
 - Production restored to `PROD-PATCHED-15.5` and verified (kv 16642998272, seqs 4, conn=0, dev=0,
   4 patches, pool 1,152,677, real generate OK). One leaked 96 GiB `/dev/shm` region was reaped.
+
+### 2026-09-21 R1 — THE TIER SERVES FOR THE FIRST TIME (both zeros removed)
+
+Booted `--patchset acr` with the 9-patch chain (01-04 + 05 + 06 + 08 ring-out-of-`_lookup_groups`
++ 09 eagle-fallback removal + 10 recurrent boundary), `--kvtransfer arc --alloc plain --pmu 8`, 96 GiB
+CPU tier. Pre-flight verified in a GPU-less container: 9/9 apply, `--check` 9/9 idempotent, and the
+`eagle_groups = set(range(...))` line no longer exists in the tree.
+
+Natural-eviction probe (`g1b_natural_restore.py`): A cold 86K-token prompt = 16.03 s; flood 1,385,248
+unique tokens (> the 1,152,677-token HBM pool); C re-send = **5.95 s (x2.69)** with
+**`load_bytes` +3.40 GB** and **68 observations on the CPU→GPU size histogram** (cumulative 18.4 GB),
+and the restored greedy text identical to cold.
+
+Every previous window this week measured `CPU_to_GPU = 0.0` with **zero** load observations, so this is
+the first direct evidence that GPU↔RAM↔GPU round-trips work on this hybrid + MTP tree — and that the
+cause was the two code-level zeros, not the model class.
+
+Open and important: x2.69 ≪ the theoretical ~x10 for 8.3 GB at ~9 GB/s, and C **re-stored 1.56 GB**,
+so the restore is partial. Candidate reasons to test rather than assume: complete-chunk-only matching
+(`supports_partial_tail` still False for non-uniform groups, upstream #54414/#57216 territory), tail
+tokens always recomputed, and/or the ring group contributing no restorable state. Correctness of the
+restored page is NOT yet established — R2 (G-1 `--field restored`) is the gate, and nothing may be
+promoted before it passes.
