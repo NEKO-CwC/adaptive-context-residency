@@ -207,3 +207,26 @@ confirm a nonzero converged `num_hit_tokens` — then, and only then, spend the 
    formula, not the instantiated value — that prints at boot).
 7. Whether disabling HMA (the only way to admit FlexKV) leaves our `mamba_cache_mode=align` +
    816-block attention correct at all — engine-config consequence I did not test.
+
+## Authoritative correction (verified against the GitHub API on 2026-09-21)
+
+The PR↔hash mapping stated in the review thread was wrong; ground truth is:
+- **#52771** — "OffloadingConnector: stop zeroing offload hits under MTP/EAGLE", merged 2026-09-07, `4a806d0`.
+- **#52807** — "Do not let a recurrent group's unhashed block trip eviction", merged 2026-09-03, `da8ec28`.
+- **#54414** — "[Feature][KV-offloading]: recent-window state groups can never participate in restores", **still open**.
+
+Reconciling the two seemingly contradictory causal results: they are **two independent sources of the
+same zero**, not competing explanations.
+1. The all-groups eagle fallback zeroes the hit when MTP/EAGLE is on → fixed upstream by #52771.
+2. The QSA `CircularBufferSpec` group sitting in `_lookup_groups` zeroes it **regardless of MTP** (our
+   N10 non-MTP case also returned 0) → **no upstream fix exists**; #54414 is the open feature request.
+Supporting asymmetry found in our own image: the HBM-side coordinator already excludes
+non-`prefix_cacheable` groups from its min-across-groups bound
+(`CircularBufferSpec.prefix_cacheable=False`, `kv_cache_interface.py:626-627`; applied at
+`kv_cache_coordinator.py:693`), while the offload connector's `_lookup_groups` has no equivalent
+filter (`offloading/scheduler.py:522`). So vLLM is internally inconsistent about the same group, and
+matching the coordinator's rule is the minimal fix.
+
+Consequence for the stack decision: production needs **both** the #52771 backport and a carried
+ring-exclusion patch; and the ring-exclusion — with the coordinator asymmetry as its justification —
+is the most defensible thing ACR has to contribute upstream.
