@@ -246,3 +246,37 @@ Also corrected on the way here, because each was measured rather than assumed:
 * the policy's geometry defaulted to `block_tokens=0` with a comment claiming inference that was
   never implemented, so `score()` returned 0.0 for every block and eviction degraded to set
   iteration order. See docs/08 / commit bf47d23.
+
+## F-11 — `long_prefill_token_threshold` is not a latency lever on this hybrid+MTP tree (measured, reverted)
+
+Window `W3-lpt2448` at 2026-09-20 08:28→08:33Z (boot 295 s, provenance verified, then reverted at
+08:42:30Z to `restore-PROD-PATCHED-15.5`). Same probe, same arms, baseline kept at
+`tune/results/batch-mech-baseline-lpt0.json`:
+
+| arm | lpt=0 | lpt=2448 | verdict |
+| --- | --- | --- | --- |
+| cold-73K, patient arriving simultaneously | TTFT 0.502 s · ITL p50 241 ms | TTFT **4.699 s** · ITL p50 **384 ms** | both worse |
+| cold-73K agent prefill | 10.37 s (≈7.1K tok/s) | **18.75 s (≈3.9K tok/s)** | −45 % throughput |
+| cold-3×18K + patient | TTFT 5.551 s | 5.426 s | no gain |
+| cold-6×18K + patient | TTFT 8.903 s | 8.202 s | −8 % |
+| warm-73K + patient | 0.84 s · 18 ms | 0.505 s · 18.6 ms | warmth still dominates everything |
+| KV capacity | 1,152,677 tokens · 1.15× | **identical** | the flag does not touch geometry, as predicted |
+
+**The hypothesis was that a waiting latency request starves because one big chunk consumes the step
+budget (`scheduler.py:728/779`), so capping the chunk leaves room.** It is falsified: capping made the
+patient's TTFT 9× worse in the co-arrival case and cost the agent 45 % of its prefill throughput.
+The code localizes *where*, not yet *which*: `num_new_tokens == 0` makes the scheduler `continue`
+(skip a request for that step) for five documented reasons, and two of them are specific to this
+tree — "insufficient budget for a block-aligned chunk in hybrid models with mamba cache mode align"
+and "insufficient budget to keep a **multi-module MTP** prefill chunk out of the prefill-lookahead
+window" (`scheduler.py:636-652`, with `:591-592` applying the cap). A sub-8192 chunk therefore drops
+small requests below the alignment/lookahead floor instead of admitting them. Separating cause 4 from
+cause 5 needs an `--mtp off` boot, which we will not spend on a knob we have already ruled out.
+
+Consequences we act on:
+1. **No `--lpt` on this stack.** Patient protection cannot come from chunk sizing.
+2. The remaining levers are the **control plane** (cap concurrent agent prefills at the gateway —
+   deployable without engine changes) and **`--scheduler-cls`** (verified present in this build,
+   `arg_utils.py:1554`), which is now the only in-engine path to a real per-step reservation.
+3. Warmth beat every scheduling knob in all five arms — which is the strongest argument yet for
+   finishing the tier (W1e), not for tuning around it.
