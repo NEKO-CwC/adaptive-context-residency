@@ -467,3 +467,26 @@ Read together, and stating the limit of the evidence:
 - Two self-inflicted measurement errors were caught and fixed the same day: a re-used content seed
   that made a "cold" 86K prefill look like 79K tok/s (the previous crashed run had warmed HBM), and a
   flood of 519K tokens that was smaller than the pool, so nothing had actually been evicted.
+
+### Code-level reason the whole request can load nothing (read 2026-09-20, no engine touched)
+
+`_lookup_complete_chunks` converges a single hit boundary across **all** groups, and inside the
+per-group loop:
+
+```
+max_hit_size_tokens = min(max_hit_size_tokens, len(offload_keys) * tokens_per_chunk)
+if max_hit_size_tokens - num_computed_tokens < tokens_per_chunk:
+    # We can only load less than a chunk, so skip.
+    return 0
+```
+
+There is no per-group partial result: one group whose chunk is coarser than the remaining hit makes
+the **entire request** load zero. On this tree the groups differ in chunk width by two orders of
+magnitude (attention 816, GDN 16, QSA ring 8), and `supports_partial_tail` is False because group
+block sizes are not uniform — so the coarsest group's alignment rule alone can veto every load.
+That matches W3i/W4 exactly: stores succeed per group, `_lookup` returns 0, `CPU_to_GPU` stays 0.0.
+
+Status of the claim: the predicate is quoted from the installed code; that this (rather than key
+identity or tier eviction) is *the* trigger for our workload is still unconfirmed — the trace patch
+that would have confirmed it crashed EngineCore (patch 07, quarantined) and will be rebuilt as an
+offline replay instead, not another production boot.
