@@ -280,3 +280,36 @@ Consequences we act on:
    `arg_utils.py:1554`), which is now the only in-engine path to a real per-step reservation.
 3. Warmth beat every scheduling knob in all five arms — which is the strongest argument yet for
    finishing the tier (W1e), not for tuning around it.
+
+## F-12 — the stock offload tier is **one-way**: store fires at ~9 GB/s, restore never fires (measured, W1f/W1g)
+
+Engine measurements, not model output. G-1 against the patched engine with a live
+`OffloadingConnector` (`arc` eviction), 2026-09-20:
+
+| window | tier | probe store Δ | store Δt | rate | load bytes | restored/cold ×4 arms | G-1 status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W1f (16 GiB) | 17,179,869,184 B | 9,689,106,176 B | 1.062 s | 9.12 GB/s | 0 | 0.97 / 0.88 / 0.92 / 0.90 | INCONCLUSIVE (rc 8) |
+| W1g (64 GiB) | 68,719,476,736 B | 9,689,106,176 B | 1.058 s | 9.15 GB/s | 0 | 0.97 / 0.59 / 0.92 / 0.90 | INCONCLUSIVE (rc 8) |
+
+(`g1-W1f.json`, `g1-W1g-cpu64.json`, `window-W1g-cpu64/probe.txt`; ratios vs the `g1-pre.json`
+cold baseline — restored arms below the 1.5× anti-vacuity bar, `g1_correctness.py:204`.)
+
+Three things this settles:
+
+1. **The store path is real and fast.** 9.1 GB/s is ~20× F-4's 446 MB/s latency break-even — the
+   host region, the offload scheduler branch (patch 05), and the DMA all work.
+2. **The load path is dead, and not for lack of budget.** At the engine's geometry (56.4 KiB/token
+   aggregate, 46 MiB per 816-token block — docs/00 §1), 16 GiB ≈ 297K tokens and 64 GiB ≈ 1.19M,
+   vs a 234K-token four-arm probe working set. If W1f left room to blame self-eviction, W1g
+   falsifies it: the tier holds the whole probe ~5× over and still restores nothing.
+3. **Byte-correctness of restore remains unmeasured.** `exact: true` ×4 in both windows holds only
+   because a never-restored page is trivially consistent — the model recomputed it. Every `T_restore`
+   term in this document is hypothetical against stock vLLM on this tree; the tier as shipped here
+   is a write-only memory.
+
+Root-cause candidates and the separating diagnosis live in docs/08 ("Phase-A verdict") and the
+medical repo's `forensics/20260920-tier-load-path-diagnosis.md` (in progress): flush clearing the
+connector's index, `OffloadKey` identity at `tokens_per_hash=8`, or load-side scheduling gates.
+This is also the finding that converts the paper's claim from "hybrid trees need group-typed
+offload" (docs/08, W1d/N7) into something sharper: even *after* the config walls and the spec
+assert are cleared, stock's load path does not engage on this tree at all.

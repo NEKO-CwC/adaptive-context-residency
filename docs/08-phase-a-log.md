@@ -313,7 +313,7 @@ Still unproven, and it is the only thing that matters for production: whether st
 ring whose live slots move is **byte-correct** (G-1), and what a real restore costs (M-1). Both need
 the window; the command is in `sets/acr/README.md`.
 
-### 2026-09-20 08:53–09:03Z — W1e: all three walls cleared, the tier reached the scheduling loop
+### 2026-09-20 08:54–09:08Z — W1e: all three walls cleared, the tier reached the scheduling loop
 
 `--patchset acr --kvtransfer arc --alloc plain --pmu 8 --devmode on`. The engine **started, loaded,
 captured graphs, and entered the busy loop**; it died at 09:03:14 inside the *first* scheduling steps:
@@ -332,7 +332,107 @@ not just in the offline probe.** `--prefix-match-unit 8` is *required* for the t
 defines. Full evidence: `tune/results/boot-failure-W1e-acr-arc.txt` (61 KB, saved by the
 `preserve_evidence` hook added the same day).
 
-Production restored to `PROD-PATCHED-15.5` at 09:03:48Z: no connector, no `--pmu`, healthy, real
-generate verified, no marker left. Next step is small and offline-first: find where
-`use_eagle_block_drop` should come from (a config field the scheduler failed to copy) and add it as
-patch 06 — the RAM↔HBM path is now one missing attribute away from a first real boot+restore.
+Production restored to `PROD-PATCHED-15.5` (restore start 09:03:48Z, provenance-verified serving
+09:08:43Z, boot 295 s, pool 1,152,677 tokens — `tune/results/window-W1e-acr-arc/deploy.log`,
+`tune/results/deploy-log.tsv`): no connector, no `--pmu`, healthy, real generate verified, no
+marker left.
+
+**Root cause, settled offline before W1f** (`sets/acr/README.md`, patch 06 header): the read at
+`scheduler.py:432` was introduced by **our own patch 01**, and its producer exists nowhere in the
+tree — `grep -rn block_drop vllm/` returns only patch 01's two read sites. *The guess written an
+hour earlier ("a config field the scheduler failed to copy") is retracted: there was nothing to
+copy; no assignment ever existed.* Patch 06 (`06-scheduler-use-eagle-block-drop.patch`) defines the
+bit as `use_eagle and mamba_fine_grained_prefix_cache`. With the fine-grained opt-in off — every
+production boot to date — `tail_boundary` is only non-zero when `prefix_match_unit` is below the
+block size, so the branch is unreachable. That makes this a **latent landmine in the shipped
+patchset**: production runs `patch=first` ⊃ patch 01, and the day anyone enables fine-grained
+prefix caching without patch 06, the first request through the tail-boundary branch kills the
+engine. The tier and the landmine are the same piece of code meeting in production for the first
+time.
+
+### 2026-09-20 09:22–09:39Z — W1f: the tier booted, served, and stored — the restore never fired
+
+Patch 06 in the set (label `W1f-acr-arc-p6`), command `deploy_qwen.sh --seqs 4 --batched 8192
+--kvgib 15.5 --util 0.80 --mtp on --patchset acr --devmode on --kvtransfer arc --alloc plain
+--pmu 8` with `NCU_CPU_OFFLOAD_GIB=16` → rendered `cpu_bytes_to_use: 17179869184`,
+`eviction_policy: "arc"` (`window-W1f-acr-arc-p6/deploy.log`).
+
+- **It served.** `Creating v1 connector … OffloadingConnector` ×5, boot **298 s**, `restarts=0`,
+  provenance ok `serving with seqs=4 patch=acr`, GPU pool unchanged at 1,152,677 tokens. (The
+  window's own generate gate still logged `VERDICT=BOoted-BUT-NOT-SERVING`, rc=2 — twelve failed
+  probes 09:27:33→09:28:35, after deploy_qwen's own probe had passed and minutes before G-1
+  completed every arm. The cause of the gate's false negative is not established from the
+  artifacts; recorded so the verdict line is not misread as "engine down".)
+- **Write direction works.** G-1 capture from 09:30:07Z (`g1-W1f.json`): offload bytes counter
+  +9,689,106,176 B (42,118,637,312 → 51,807,743,488) over +1.062 s of store time ⇒ **9.12 GB/s**.
+  Sync lookups did run (`kv_offload_lookup_sync_delay_seconds_count` 11 → 27).
+- **Read direction never fired.** `total_bytes` equals `store_bytes` to the byte and
+  `cpu_cache_read_usage_perc` stays 0.0 — no load-direction bytes or time appear anywhere in the
+  end-of-probe snapshot. Restored-vs-baseline-cold (compare against `g1-pre.json`, anti-vacuity
+  bar 1.5×, `g1_correctness.py:204`): **x0.97 / x0.88 / x0.92 / x0.90** at 4K/16K/64K/150K — a
+  "restored" request pays full recompute cost. All four arms under the bar ⇒ **INCONCLUSIVE
+  (rc 8)**, by construction: the test never engaged the thing it measures.
+- **Correctness held trivially.** `exact: true` ×4, worst dlogprob 0.0017 vs within-config noise
+  floor 0.00257; greedy text and retrieved secrets identical in cold/warm/restored.
+  `reset_ok: true` ×4 — the HBM flush worked; the tier simply never brought anything back.
+- Reverted at 09:33:52; `restore-PROD-PATCHED-15.5` serving 09:39:14Z, boot 294 s
+  (`W1f-revert.out`).
+
+### 2026-09-20 10:04–10:18Z — W1g: a 64 GiB tier falsifies the eviction hypothesis
+
+Identical to W1f with `NCU_CPU_OFFLOAD_GIB=64` → `cpu_bytes_to_use: 68719476736` (provenance block,
+`window-W1g-cpu64/deploy.log`). Boot 313 s, `VERDICT=SERVING`, `g1 rc=8`.
+
+- Store again moved first: probe delta **9,689,106,176 B** (9,689,222,656 − 116,480) over 1.058 s
+  ⇒ 9.15 GB/s — byte-identical to W1f's delta because G-1 replays the same seeded content.
+- Read again nothing: same counter shape, and restored-vs-cold **x0.97 / x0.59 / x0.92 / x0.90**
+  (`probe.txt`).
+- **Why this was the right test** — capacity arithmetic at the engine's geometry (docs/00 §1:
+  56.4 KiB/token aggregate, one 816-token block ≈ 46 MiB): 16 GiB ≈ **297K tokens**, 64 GiB ≈
+  **1.19M tokens**. The probe's largest single context is 150K tokens and all four arms together
+  are 234K unique tokens — the 64 GiB tier holds the entire probe working set ~5× over. So
+  "16 GiB was too small, the tier self-evicted the answer before reuse" was testable rather than
+  obviously false, and W1g kills it: the load path does not engage even with a generous budget.
+- Reverted at 10:13:10; restore serving 10:18:31Z, boot 294 s (`W1g-revert.out`).
+
+## Phase-A verdict, as of 2026-09-20: the stock tier is one-way
+
+Stated no stronger than the evidence: **on this hybrid tree the stock `OffloadingConnector`
+stores and never restores.** Two windows, two tier sizes (16/64 GiB), four arms each: store fires
+at ~9.1 GB/s (20× F-4's 446 MB/s break-even bar — bandwidth is not the problem), restore never
+transfers a byte, and every "restored" request pays full recompute. G-1 verdicts are INCONCLUSIVE
+— the question "does a restored page come back byte-correct" has still never been brought against
+a restoring engine. Falsified along the way: tier size / self-eviction as the explanation.
+
+Open root-cause candidates, none of which needs another production window:
+
+1. the `reset_external=false` semantics of G-1's HBM flush possibly clearing the connector's own
+   index — the flush *is* what forces the restore path;
+2. `OffloadKey` identity mismatch between store and lookup at `tokens_per_hash=8` (the `--pmu 8`
+   path changed hash granularity; a key stored under one identity and looked up under another
+   misses silently);
+3. load-side scheduling gates (`offload_prompt_only`, `store_threshold`, `HIT_PENDING`) that
+   could accept stores and drop loads without moving any counter.
+
+The separating diagnosis is tracked in `forensics/20260920-tier-load-path-diagnosis.md` in the
+medical repo (in progress as of this writing; until it lands, the candidates are simply open).
+Measured summary recorded as docs/05 F-12.
+
+### Process cost of the three tier windows
+
+- Non-serving time per the window logs and `deploy-log.tsv`: W1e 08:54:04→09:08:43 = **14 min 39 s**
+  (the engine never served inside the window), W1f = 10 min 48 s (two boots), W1g = 10 min 40 s
+  (two boots) — **≈36 min total**, ~47 min of window span. A "~15 min total" figure would be about
+  right for one window and wrong for three.
+- Every window ended on a provenance-verified `PROD-PATCHED-15.5` (restores serving 09:08:43 /
+  09:39:14 / 10:18:31Z, boot 294–296 s, pool 1,152,677 tokens); the chain in `deploy-log.tsv` is
+  unbroken from 09-17 to here.
+- `preserve_evidence`, added the same day, is what made W1e's root cause knowable at all: the 61 KB
+  traceback (`boot-failure-W1e-acr-arc.txt`) is the artifact behind the landmine finding. Without
+  the hook, W1e joins the 09-18/19 list of "engine died, no traceback".
+- The same morning's W3 `--lpt` window is already recorded as docs/05 F-11 (probe artifacts
+  `tune/results/batch-mech-baseline-lpt0.json`, `batch-mech.json`); not duplicated here.
+- One new process fact worth keeping: on the rc=2 path `run_window.sh` does **not** restore (the
+  gate says "booted", provenance says "serving"), so a `BOoted-BUT-NOT-SERVING` verdict must be
+  re-checked against provenance and a direct probe before anyone acts on it — W1f passed that check
+  by luck of a separate G-1 run, not by design.
