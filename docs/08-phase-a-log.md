@@ -490,3 +490,60 @@ Status of the claim: the predicate is quoted from the installed code; that this 
 identity or tier eviction) is *the* trigger for our workload is still unconfirmed — the trace patch
 that would have confirmed it crashed EngineCore (patch 07, quarantined) and will be rebuilt as an
 offline replay instead, not another production boot.
+
+### 2026-09-21 — the veto claim, EXECUTED offline on the pristine image (`connector_lookup_veto_probe.py`, N10)
+
+Method (all executed, no engine, no GPU, pinned image `sha256:0aea3024…`): built a real
+`OffloadingConnectorScheduler` over the three-group set (attention 816 / QSA-ring 8 / GDN 16,
+`tokens_per_hash=8`, `blocks_per_chunk=1`) with the pristine library's own `from_spec` +
+`_lookup_complete_chunks` + `_maximal_prefix_lookup` + `_sliding_window_lookup` +
+`RequestOffloadState.update_offload_keys`, driven by a controlled HIT/MISS manager (the tier's
+residency is the only thing the harness sets — the veto is scheduler arithmetic over that), then
+called the **real** `_lookup_complete_chunks` for an 86,000-token prompt, fully-evicted
+(`num_locally_computed_tokens=0`). The ring needs a classification shim only so `from_spec` can
+build (stock `get_sliding_window_size_in_chunks` asserts on `CircularBufferSpec` at :125); the
+**lookup method itself is never patched**. Every case was cross-checked against an independent
+reimplementation of the scalar loop — 11/11 executed returns agree with the arithmetic.
+
+**Verdict on the claim: REFUTED as stated, with the real mechanism relocated.**
+
+- Heterogeneous **chunk width** does not veto. With every lookup group complete and
+  boundary-consistent, the real method returns a large hit — it does **not** return 0. The
+  two-group width-mismatch tree [FA 816 + GDN 16] returns exactly the same hit as the uniform
+  tree [FA 816 + 816] (84,864), so a "chunk-width reconciliation" would change nothing.
+- The only executed path to a hard 0 is the **ring acting as an un-completable full-attention
+  lookup group**: `CircularBufferManager` pins a single block, so the ring's
+  `_maximal_prefix_lookup` yields at most one resident chunk, which caps `max_hit` below the next
+  group's `tokens_per_chunk` and trips the quoted `return 0`.
+
+| case (EXECUTED)                                            | hit    | where it stops |
+|------------------------------------------------------------|-------:|----------------|
+| a  [FA816+GDN16] all complete, MTP                         | 84,864 | return num_hit |
+| b  = a, ring excluded from lookup                          | 84,864 | return num_hit |
+| c  [FA816+GDN16] attn complete, GDN short by one chunk     | 84,864 | return num_hit |
+| d  [FA816+GDN16] prompt 86,000 (misaligned), all complete  | 84,864 | return num_hit |
+| d' prompt 86,016 (aligned to 816), all complete            | 84,864 | return num_hit |
+| a-ctl [FA816+GDN16] all complete, no MTP                   | 85,680 | return num_hit |
+| e  uniform width (both 816), all complete                  | 84,864 | return num_hit |
+| a-SET3 [FA816+ring8+GDN16] all complete incl ring          | 84,856 | return num_hit |
+| **a-real ring as lookup group, only 1 pinned chunk (MTP)** |   **0**| g-ring @808-810|
+| **ring-sparse non-MTP**                                    |   **0**| g-ring→g-GDN @748-753 (the quoted line)|
+| b-SET3 ring excluded, attn+GDN complete                    | 84,864 | return num_hit |
+
+The last non-zero-vs-zero pair is the discriminator: with the ring present in `_lookup_groups` it
+is **0** (and the non-MTP variant halts on the *exact* quoted `max_hit_size_tokens - num_computed
+< tokens_per_chunk → return 0`); excluding the ring restores **84,864**.
+
+**Minimal library-side fix (per the case boundary, not the width hypothesis):** do NOT chase
+chunk-width reconciliation. Drop the ring group from `_lookup_groups`/`_sliding_window_groups`
+exactly as revised patch-05 does (case b → 84,864). The residual risk that case (a-real) is
+*also* the deployed failure is why the ring must be excluded from lookup, not just from stores.
+
+**Executable prediction for the next production window:** with the ring excluded from the lookup
+groups, a re-sent 86,000-token prompt after full HBM eviction must have `_lookup_complete_chunks`
+return ≈84,856–85,680 (not 0), and `vllm:kv_offload_total_bytes{transfer_type="CPU_to_GPU"}` must
+become > 0 (restore beats cold re-prefill, x>1.0 vs cold). **If it still returns 0, the deployed
+tree has NOT removed the ring from the *lookup* groups** (old-05 shape — ring in
+`full_attention_groups`) — the fix is confirmed wrong-or-not-applied, and the width hypothesis is
+still not the cause. All labels here are EXECUTED (offline replay); the production numbers are the
+next window to confirm.

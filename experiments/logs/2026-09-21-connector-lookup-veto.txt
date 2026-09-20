@@ -1,0 +1,113 @@
+N10 — stock `_lookup_complete_chunks` veto probe (pristine image, no GPU)
+    prompt = 86000 tokens, tokens_per_hash = 8
+
+  SET2 config: lookup_groups=(0, 1) sliding=(1,) mamba_align=16 partial_tail=False
+
+=== OK (a) SET2 all complete [eagle] ===
+    per-group (tokens_per_chunk, #offload_keys, #resident): {'g0': (816, 105, 105), 'g1': (16, 5375, 5375)}
+    EXECUTED _lookup_complete_chunks -> 84864
+    arithmetic predict                -> 84864   [return num_hit_tokens]
+      · init max_hit=85984 (computed=0, mamba_align=16)
+      · g0 tpc=816 keys=105 nhit=104 max_hit->84864 new_hit=84864
+      · g1 tpc=16 keys=5375 nhit=5304 max_hit->84864 new_hit=84864
+
+=== OK (b) = SET2 all complete (ring excluded) [eagle] ===
+    per-group (tokens_per_chunk, #offload_keys, #resident): {'g0': (816, 105, 105), 'g1': (16, 5375, 5375)}
+    EXECUTED _lookup_complete_chunks -> 84864
+    arithmetic predict                -> 84864   [return num_hit_tokens]
+      · init max_hit=85984 (computed=0, mamba_align=16)
+      · g0 tpc=816 keys=105 nhit=104 max_hit->84864 new_hit=84864
+      · g1 tpc=16 keys=5375 nhit=5304 max_hit->84864 new_hit=84864
+
+=== OK (c) SET2 attn complete, mamba -1 chunk [eagle] ===
+    per-group (tokens_per_chunk, #offload_keys, #resident): {'g0': (816, 105, 105), 'g1': (16, 5375, 5374)}
+    EXECUTED _lookup_complete_chunks -> 84864
+    arithmetic predict                -> 84864   [return num_hit_tokens]
+      · init max_hit=85984 (computed=0, mamba_align=16)
+      · g0 tpc=816 keys=105 nhit=104 max_hit->84864 new_hit=84864
+      · g1 tpc=16 keys=5375 nhit=5304 max_hit->84864 new_hit=84864
+
+=== OK (d) SET2 86000 misaligned, all complete [eagle] ===
+    per-group (tokens_per_chunk, #offload_keys, #resident): {'g0': (816, 105, 105), 'g1': (16, 5375, 5375)}
+    EXECUTED _lookup_complete_chunks -> 84864
+    arithmetic predict                -> 84864   [return num_hit_tokens]
+      · init max_hit=85984 (computed=0, mamba_align=16)
+      · g0 tpc=816 keys=105 nhit=104 max_hit->84864 new_hit=84864
+      · g1 tpc=16 keys=5375 nhit=5304 max_hit->84864 new_hit=84864
+
+=== OK (d') SET2 86016 aligned to 816, all complete [eagle] ===
+    per-group (tokens_per_chunk, #offload_keys, #resident): {'g0': (816, 105, 105), 'g1': (16, 5376, 5376)}
+    EXECUTED _lookup_complete_chunks -> 84864
+    arithmetic predict                -> 84864   [return num_hit_tokens]
+      · init max_hit=86000 (computed=0, mamba_align=16)
+      · g0 tpc=816 keys=105 nhit=104 max_hit->84864 new_hit=84864
+      · g1 tpc=16 keys=5376 nhit=5304 max_hit->84864 new_hit=84864
+
+=== OK (a) SET2 all complete [no eagle] ===
+    per-group (tokens_per_chunk, #offload_keys, #resident): {'g0': (816, 105, 105), 'g1': (16, 5375, 5375)}
+    EXECUTED _lookup_complete_chunks -> 85680
+    arithmetic predict                -> 85680   [return num_hit_tokens]
+      · init max_hit=85984 (computed=0, mamba_align=16)
+      · g0 tpc=816 keys=105 nhit=105 max_hit->85680 new_hit=85680
+      · g1 tpc=16 keys=5375 nhit=5355 max_hit->85680 new_hit=85680
+
+=== OK (e) uniform width (both 816), all complete [eagle] ===
+    per-group (tokens_per_chunk, #offload_keys, #resident): {'g0': (816, 105, 105), 'g1': (816, 105, 105)}
+    EXECUTED _lookup_complete_chunks -> 84864
+    arithmetic predict                -> 84864   [return num_hit_tokens]
+      · init max_hit=85680 (computed=0, mamba_align=816)
+      · g0 tpc=816 keys=105 nhit=104 max_hit->84864 new_hit=84864
+      · g1 tpc=816 keys=105 nhit=104 max_hit->84864 new_hit=84864
+
+  SET3 config: lookup_groups=(0, 1, 2) sliding=(2,) mamba_align=16
+
+=== OK (a) SET3 all complete incl ring [eagle] ===
+    per-group (tokens_per_chunk, #offload_keys, #resident): {'g0': (816, 105, 105), 'g1': (8, 10750, 10750), 'g2': (16, 5375, 5375)}
+    EXECUTED _lookup_complete_chunks -> 84856
+    arithmetic predict                -> 84856   [return num_hit_tokens]
+      · init max_hit=85984 (computed=0, mamba_align=16)
+      · g0 tpc=816 keys=105 nhit=104 max_hit->84864 new_hit=84864
+      · g1 tpc=8 keys=10750 nhit=10607 max_hit->84856 new_hit=84856
+      · g2 tpc=16 keys=5375 nhit=5304 max_hit->84856 new_hit=84856
+
+=== OK a-real SET3 attn+mamba complete, ring has 1 stored chunk [eagle] ===
+    per-group (tokens_per_chunk, #offload_keys, #resident): {'g0': (816, 105, 105), 'g1': (8, 10750, 1), 'g2': (16, 5375, 5375)}
+    EXECUTED _lookup_complete_chunks -> 0
+    arithmetic predict                -> 0   [g1 @808-810 (hit 0 < chunk 8)]
+      · init max_hit=85984 (computed=0, mamba_align=16)
+      · g0 tpc=816 keys=105 nhit=104 max_hit->84864 new_hit=84864
+      · g1 tpc=8 keys=10750 nhit=0 max_hit->0 new_hit=0
+
+=== OK (b) SET3 ring excluded, attn+mamba complete [eagle] ===
+    per-group (tokens_per_chunk, #offload_keys, #resident): {'g0': (816, 105, 105), 'g1': (8, 10750, 0), 'g2': (16, 5375, 5375)}
+    EXECUTED _lookup_complete_chunks -> 84864
+    arithmetic predict                -> 84864   [return num_hit_tokens]
+      · init max_hit=85984 (computed=0, mamba_align=16)
+      · g0 tpc=816 keys=105 nhit=104 max_hit->84864 new_hit=84864
+      · g2 tpc=16 keys=5375 nhit=5304 max_hit->84864 new_hit=84864
+
+=== OK ring-sparse NON-eagle SET3 (hits literal 748-753) ===
+    per-group (tokens_per_chunk, #offload_keys, #resident): {'g0': (816, 105, 105), 'g1': (8, 10750, 1), 'g2': (16, 5375, 5375)}
+    EXECUTED _lookup_complete_chunks -> 0
+    arithmetic predict                -> 0   [g2 @748-753 (cap 86000 < computed+chunk)]
+      · init max_hit=85984 (computed=0, mamba_align=16)
+      · g0 tpc=816 keys=105 nhit=105 max_hit->85680 new_hit=85680
+      · g1 tpc=8 keys=10750 nhit=1 max_hit->8 new_hit=8
+      · g2 tpc=16 keys=5375 max_hit->8: 8 < 16
+
+
+================ SUMMARY ================
+case                                                           exec     pred agree  halt
+(a) SET2 all complete [eagle]                                 84864    84864    Y   return num_hit_tokens
+(b) = SET2 all complete (ring excluded) [eagle]               84864    84864    Y   return num_hit_tokens
+(c) SET2 attn complete, mamba -1 chunk [eagle]                84864    84864    Y   return num_hit_tokens
+(d) SET2 86000 misaligned, all complete [eagle]               84864    84864    Y   return num_hit_tokens
+(d') SET2 86016 aligned to 816, all complete [eagle]          84864    84864    Y   return num_hit_tokens
+(a) SET2 all complete [no eagle]                              85680    85680    Y   return num_hit_tokens
+(e) uniform width (both 816), all complete [eagle]            84864    84864    Y   return num_hit_tokens
+(a) SET3 all complete incl ring [eagle]                       84856    84856    Y   return num_hit_tokens
+a-real SET3 attn+mamba complete, ring has 1 stored chunk [eagle]        0        0    Y   g1 @808-810 (hit 0 < chunk 8)
+(b) SET3 ring excluded, attn+mamba complete [eagle]           84864    84864    Y   return num_hit_tokens
+ring-sparse NON-eagle SET3 (hits literal 748-753)                 0        0    Y   g2 @748-753 (cap 86000 < computed+chunk)
+
+11 cases, 0 arithmetic disagreements (a disagreement = harness bug, not a finding)
