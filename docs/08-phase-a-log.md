@@ -436,3 +436,34 @@ Measured summary recorded as docs/05 F-12.
   gate says "booted", provenance says "serving"), so a `BOoted-BUT-NOT-SERVING` verdict must be
   re-checked against provenance and a direct probe before anyone acts on it — W1f passed that check
   by luck of a separate G-1 run, not by design.
+
+### 2026-09-20 12:33–12:58Z — W3i/W4: the tier stores, and under a valid test it never reads back
+
+Two windows, both uncontended (measurement ran while no model turn was in flight), with per-arm
+counter attribution added to `g1_correctness.py` after W2h showed label-flattened counters had
+fooled us.
+
+**W3i** (96 GiB tier, quiet engine): correctness clean (4/4 sizes identical text, `retrieval_ok=True`,
+worst dlogprob 0.00199 < noise floor 0.00257). But every `restored` arm **stored again**
+(16K→0, 64K→+478 MB, 150K→+1.08 GB) and the load series was absent entirely: `/reset_prefix_cache` +
+re-send makes the engine **re-prefill**, so G-1's flush lever does not exercise the restore path at
+all. G-1 verdict: INCONCLUSIVE (now correctly reported as "no benefit observed", with the earlier
+FAIL reclassified — that FAIL was an empty arm from a refused flush, i.e. missing data).
+
+**W4 / G-1b** (128 GiB tier, `g1b_natural_restore.py` — natural eviction instead of a dev flush):
+A cold 86K-token prompt = **10.973 s** (7.8K tok/s, genuinely cold), flood **1,385,248 tokens of
+unique content > the 1,152,677-token HBM pool** so P is truly evicted (the tier wrote 59.5 GB during
+the flood), then re-send: **10.938 s (x1.00)**, identical text, **load_bytes +0.00 GB**, and it
+**stored another 1.51 GB**. `CPU_to_GPU` stayed 0.0 for the whole window.
+
+Read together, and stating the limit of the evidence:
+- **Store direction: works**, at multiple GB per request, correctness无反证.
+- **Load direction: never observed under a controlled test.** W2h did record 65.7 GB of loads, but
+  only while a live multi-turn session was resuming its own context — so the plausible split is
+  *continuation of an existing session loads; a brand-new request carrying identical content does not*.
+  That is a claim about vLLM's connector semantics that we have not yet pinned to code, and it means
+  **byte-equivalence of a restored page remains unverified** — the project's central correctness
+  question is still open, not passed.
+- Two self-inflicted measurement errors were caught and fixed the same day: a re-used content seed
+  that made a "cold" 86K prefill look like 79K tok/s (the previous crashed run had warmed HBM), and a
+  flood of 519K tokens that was smaller than the pool, so nothing had actually been evicted.
