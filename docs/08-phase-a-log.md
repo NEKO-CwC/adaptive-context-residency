@@ -591,3 +591,25 @@ so the restore is partial. Candidate reasons to test rather than assume: complet
 tokens always recomputed, and/or the ring group contributing no restorable state. Correctness of the
 restored page is NOT yet established — R2 (G-1 `--field restored`) is the gate, and nothing may be
 promoted before it passes.
+
+### 2026-09-21 R2 — correctness on real loads, and the tier's benefit is length-dependent
+
+G-1 against the serving R1 engine: `worst dlogprob = 0.00181` vs noise floor `0.00257`, restored
+greedy text identical to cold ⇒ **first evidence of a correct GPU→RAM→GPU round-trip on this tree**.
+Per-arm benefit: 150K **x6.89**, but 4K **x0.88** and 16K **x0.78** ⇒ the gate returned INCONCLUSIVE
+because it demands ≥1.5x on *every* arm.
+
+Two conclusions, kept separate deliberately:
+1. **Benefit is size-dependent and that is physics, not a bug.** A 4K prompt is 5 blocks and re-prefills
+   in ~0.55 s; DMA plus lookup overhead swamps that. The tier pays where contexts are 100K–1M, i.e. it
+   is a **coding-session mechanism, not a patient-session mechanism**. Our earlier "residency removes the
+   interference harm for patients" framing named the right effect but the wrong beneficiary: patients are
+   harmed by *someone else's* cold prefill occupying the step, and the tier helps by keeping the *agent*
+   from needing that prefill at all.
+2. **The gate conflates two questions.** `g1_correctness.py compare` folds byte-equivalence and
+   cost-benefit into one verdict, so a physically-expected short-context result contaminates a correctness
+   decision. Split it into `correctness=` (dlogprob/text, per arm) and `benefit=` (speedup plus the
+   arm's own `load_bytes` attribution), and require the attribution before calling an arm "not served".
+
+Nothing is promoted. Production must be returned to `PROD-PATCHED-15.5` before this session ends unless
+the user chooses to keep the tier window open for more measurements.
